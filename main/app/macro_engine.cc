@@ -359,7 +359,11 @@ static esp_err_t macro_save_locked(const char *name)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "macro_save: index blob store failed: %s",
                  esp_err_to_name(ret));
-        macro_steps_erase(id);
+        esp_err_t e = macro_steps_erase(id);
+        if (e != ESP_OK) {
+            ESP_LOGW(TAG, "macro_save rollback: steps erase for id=%u failed: %s",
+                     (unsigned)id, esp_err_to_name(e));
+        }
         macro_core_index_remove(id);
         macro_core_record_reset();
         s_state = MACRO_STATE_IDLE;

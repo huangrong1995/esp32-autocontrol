@@ -83,6 +83,61 @@ static inline int web_profile_id_valid(uint32_t id, uint32_t count)
 }
 
 /*
+ * JSON-escape `src` into `dst` (capacity `cap`). Escapes `"` -> `\"` and
+ * `\` -> `\\`; control chars (< 0x20) use the JSON short forms where they
+ * exist (`\b \f \n \r \t`) and `\u00XX` otherwise. Bounded: never writes past
+ * cap-1 (a NUL is always left), and never splits an escape sequence — when
+ * fewer than `need` bytes remain for the current character, it stops BEFORE
+ * the backslash so truncation cannot produce a dangling `\`. NULL `src` is
+ * treated as "". NULL/zero-cap `dst` is a no-op. Host-compilable.
+ */
+static inline void web_escape_json(const char *src, char *dst, size_t cap)
+{
+    if (dst == NULL || cap == 0) {
+        return;
+    }
+    if (src == NULL) {
+        src = "";
+    }
+    static const char HEX[] = "0123456789ABCDEF";
+    char *o = dst;
+    char *const limit = dst + cap - 1;   /* one byte reserved for the NUL */
+    for (const char *p = src; *p != '\0'; p++) {
+        unsigned char c = (unsigned char)*p;
+        const char *esc = NULL;          /* short escape: `\` + 1 char */
+        char hex[6];                     /* `\u00XX` (6 chars + NUL below) */
+        switch (c) {
+        case '"':  esc = "\\\""; break;
+        case '\\': esc = "\\\\"; break;
+        case '\b': esc = "\\b";  break;
+        case '\f': esc = "\\f";  break;
+        case '\n': esc = "\\n";  break;
+        case '\r': esc = "\\r";  break;
+        case '\t': esc = "\\t";  break;
+        default:
+            if (c < 0x20) {
+                hex[0] = '\\'; hex[1] = 'u'; hex[2] = '0'; hex[3] = '0';
+                hex[4] = HEX[(c >> 4) & 0xF];
+                hex[5] = HEX[c & 0xF];
+                esc = hex;
+            }
+            break;
+        }
+        size_t need = (esc != NULL) ? strlen(esc) : 1u;
+        if ((size_t)(limit - o) < need) {
+            break;   /* no room for the whole sequence: stop before `\` */
+        }
+        if (esc != NULL) {
+            memcpy(o, esc, need);
+            o += need;
+        } else {
+            *o++ = (char)c;
+        }
+    }
+    *o = '\0';
+}
+
+/*
  * Format the JSON payload of GET /api/status:
  *   {"paired_profile":N,"paired_name":"...","macros":[
  *       {"id":..,"name":"..","step_count":..,"first_key":"POWER"},
@@ -123,10 +178,12 @@ static inline int web_format_status(uint8_t paired_profile, const char *paired_n
     APPEND("{\"paired_profile\":%u,\"paired_name\":\"%s\",\"macros\":[",
            (unsigned)paired_profile, paired_name);
     unsigned shown = (macros_array != NULL) ? (unsigned)macros_count : 0u;
+    char esc_name[MACRO_NAME_CAP * 6 + 1];   /* worst case: every char \u00XX */
     for (unsigned i = 0; i < shown; i++) {
         const macro_info_t *m = &macros_array[i];
+        web_escape_json(m->name, esc_name, sizeof(esc_name));
         APPEND("%s{\"id\":%u,\"name\":\"%s\",\"step_count\":%u,\"first_key\":\"%s\"}",
-               (i ? "," : ""), (unsigned)m->id, m->name,
+               (i ? "," : ""), (unsigned)m->id, esc_name,
                (unsigned)m->step_count, web_key_name(m->first_key));
     }
     APPEND("],\"playback\":{\"state\":\"%s\",\"current_step\":%u}}",

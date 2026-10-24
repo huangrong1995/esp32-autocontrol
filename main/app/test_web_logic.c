@@ -127,6 +127,31 @@ int main(void)
     ASSERT(web_profile_id_valid(0xFF000000u, 4) == 0, "huge uint32 id must be invalid");
     ASSERT(web_profile_id_valid(3, 0) == 0, "empty library: any id invalid");
 
+    /* Test 8: macro names with quotes/backslashes/control chars must be
+     * JSON-escaped in the status payload (fix round 1 — an unescaped name
+     * would make GET /api/status emit INVALID JSON and kill the macro UI). */
+    macro_info_t hostile[1];
+    hostile[0].id = 4;
+    strcpy(hostile[0].name, "say \"hi\\\"\n");   /* say "hi\"<LF> */
+    hostile[0].step_count = 1;
+    hostile[0].first_key = IR_KEY_OK;
+    n = web_format_status(0xFF, "", hostile, 1, "idle", 0, buf, sizeof(buf));
+    ASSERT(n > 0, "status with a hostile macro name must format");
+    ASSERT(strstr(buf, "\"name\":\"say \\\"hi\\\\\\\"\\n\"") != NULL,
+           "\" \\ and LF must escape as \\\" \\\\ \\n");
+    ASSERT(strstr(buf, "\"name\":\"say \"hi") == NULL,
+           "no raw (unescaped) quote may appear inside the name value");
+
+    macro_info_t ctrl[1];
+    ctrl[0].id = 5;
+    strcpy(ctrl[0].name, "a\x01z\t");   /* a, SOH, z, TAB */
+    ctrl[0].step_count = 1;
+    ctrl[0].first_key = IR_KEY_OK;
+    n = web_format_status(0xFF, "", ctrl, 1, "idle", 0, buf, sizeof(buf));
+    ASSERT(n > 0, "status with control chars in macro name must format");
+    ASSERT(strstr(buf, "\"name\":\"a\\u0001z\\t\"") != NULL,
+           "SOH escapes as \\u0001 and TAB as \\t");
+
     printf("WEB_LOGIC_SELFTEST_PASS\n");
     return 0;
 }

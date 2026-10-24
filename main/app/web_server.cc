@@ -481,12 +481,16 @@ static esp_err_t handle_api_macro_play(httpd_req_t *req)
         return send_json(req, "404 Not Found", "{\"error\":\"macro not found\"}");
     }
     if (e == ESP_ERR_INVALID_STATE) {
-        /* macro_play returns INVALID_STATE for both "unpaired" and "already
-         * playing"; distinguish for a clear client message. */
-        if (macro_is_playing()) {
+        /* macro_play returns INVALID_STATE for "unpaired" and "engine busy"
+         * alike; key off the live engine state for an accurate message. */
+        switch (macro_get_state()) {
+        case MACRO_STATE_PLAYING:
             return send_json(req, "400 Bad Request", "{\"error\":\"already playing\"}");
+        case MACRO_STATE_RECORDING:
+            return send_json(req, "400 Bad Request", "{\"error\":\"recording in progress\"}");
+        default:
+            return send_json(req, "400 Bad Request", "{\"error\":\"not paired\"}");
         }
-        return send_json(req, "400 Bad Request", "{\"error\":\"not paired\"}");
     }
     if (e != ESP_OK) {
         return send_json(req, "400 Bad Request", "{\"error\":\"play failed\"}");
