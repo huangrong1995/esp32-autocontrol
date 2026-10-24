@@ -1,11 +1,180 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>esp32-ir-remote</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>esp32-ir-remote</title>
+<style>
+  :root {
+    --bg: #101418;
+    --panel: #1a2026;
+    --text: #e6e9ec;
+    --muted: #8b949c;
+    --border: #2a323a;
+    --accent: #3b82f6;
+    --ok: #22c55e;
+    --danger: #ef4444;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0 auto; padding: 0 12px 24px;
+    max-width: 480px;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 16px 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .paired {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; font-size: 14px; margin-bottom: 12px;
+  }
+  .paired b { color: var(--ok); }
+  .paired .none { color: var(--muted); }
+  section {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; margin-bottom: 12px;
+  }
+  section h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent); }
+  .profile {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 0; border-top: 1px solid var(--border);
+  }
+  .profile:first-of-type { border-top: none; }
+  .profile .name { flex: 1 1 140px; font-size: 14px; }
+  .profile .note { font-size: 12px; color: var(--muted); }
+  button {
+    font: inherit; color: #fff; background: var(--accent);
+    border: none; border-radius: 8px; padding: 8px 12px; cursor: pointer;
+  }
+  button:active { filter: brightness(0.85); }
+  button.test { background: #f59e0b; }
+  button.pair { background: var(--ok); }
+  .grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 8px; margin-top: 4px;
+  }
+  .grid button {
+    padding: 16px 0; font-size: 15px; background: #232a31;
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  .grid button.power { grid-column: span 3; background: var(--danger); font-size: 17px; }
+  #statusline { color: var(--muted); font-size: 13px; min-height: 18px; margin: 8px 2px; }
+  #statusline.error { color: var(--danger); }
+  #statusline.ok { color: var(--ok); }
+  .macro-placeholder { color: var(--muted); font-size: 13px; margin: 0; }
+</style>
 </head>
 <body>
-    <h1>esp32-ir-remote</h1>
+  <h1>ESP32 红外遥控</h1>
+  <p class="sub">手机连热点后访问 192.168.4.1 · 先配对,再点键遥控</p>
+  <div class="paired">当前配对:<span id="pairedName" class="none">未配对</span></div>
+  <div id="statusline"></div>
+
+  <section>
+    <h2>① 配对 — 每档先试「电源」,电视有反应就「就用这档」</h2>
+    <div id="profileList"><div class="profile"><span class="name">加载中…</span></div></div>
+  </section>
+
+  <section>
+    <h2>② 遥控器</h2>
+    <div class="grid" id="keyGrid"></div>
+  </section>
+
+  <section>
+    <h2>③ 宏</h2>
+    <p class="macro-placeholder">宏录制 / 一键回放将在下一版本开放。</p>
+  </section>
+
+<script>
+function setStatus(msg, kind) {
+  var el = document.getElementById('statusline');
+  el.textContent = msg || '';
+  el.className = kind || '';
+}
+
+function api(url, opts) {
+  return fetch(url, opts).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (data) {
+      if (!r.ok) { throw new Error(data.error || ('HTTP ' + r.status)); }
+      return data;
+    });
+  });
+}
+
+function refreshStatus() {
+  api('/api/status').then(function (d) {
+    var el = document.getElementById('pairedName');
+    if (d.paired_profile === 255) {
+      el.textContent = '未配对';
+      el.className = 'none';
+    } else {
+      el.textContent = d.paired_name || ('档 #' + d.paired_profile);
+      el.className = '';
+    }
+  }).catch(function (e) { setStatus('读取状态失败: ' + e.message, 'error'); });
+}
+
+function refreshProfiles() {
+  api('/api/profiles').then(function (list) {
+    var html = '';
+    list.forEach(function (p) {
+      html += '<div class="profile">' +
+        '<span class="name">' + p.name + '</span>' +
+        '<span class="note">' + (p.keys_known ? '全键可用' : '部分键缺失') + '</span>' +
+        '<button class="test" onclick="testPower(' + p.id + ')">电源测试</button>' +
+        '<button class="pair" onclick="pair(' + p.id + ')">就用这档</button>' +
+        '</div>';
+    });
+    document.getElementById('profileList').innerHTML = html;
+  }).catch(function (e) { setStatus('读取信号库失败: ' + e.message, 'error'); });
+}
+
+function testPower(id) {
+  setStatus('正在发送 档#' + id + ' 的电源键…');
+  api('/api/key', { method: 'POST', body: JSON.stringify({ key: 'POWER', profile_id: id }) })
+    .then(function () { setStatus('已发送 档#' + id + ' 的电源键,电视有反应吗?', 'ok'); })
+    .catch(function (e) { setStatus('发送失败: ' + e.message, 'error'); });
+}
+
+function pair(id) {
+  api('/api/pair', { method: 'POST', body: JSON.stringify({ profile_id: id }) })
+    .then(function (d) {
+      setStatus('已配对: 档#' + d.paired_profile, 'ok');
+      refreshStatus();
+    })
+    .catch(function (e) { setStatus('配对失败: ' + e.message, 'error'); });
+}
+
+function sendKey(name) {
+  api('/api/key', { method: 'POST', body: JSON.stringify({ key: name }) })
+    .then(function () { setStatus('已发送 ' + name, 'ok'); })
+    .catch(function (e) { setStatus('发送失败: ' + e.message, 'error'); });
+}
+
+/* 23 键布局(POWER 跨整行)。按键名称必须与固件 web_parse_key_name 完全一致。 */
+var KEY_LAYOUT = [
+  { name: 'POWER', cls: 'power' },
+  { name: 'MENU' }, { name: 'EXIT' }, { name: 'MUTE' },
+  { name: 'CH+' }, { name: 'OK' }, { name: 'CH-' },
+  { name: 'VOL-' }, { name: 'UP' }, { name: 'VOL+' },
+  { name: 'LEFT' }, { name: 'DOWN' }, { name: 'RIGHT' },
+  { name: '1' }, { name: '2' }, { name: '3' },
+  { name: '4' }, { name: '5' }, { name: '6' },
+  { name: '7' }, { name: '8' }, { name: '9' },
+  { name: '0' }
+];
+
+function renderGrid() {
+  var html = '';
+  KEY_LAYOUT.forEach(function (k) {
+    html += '<button class="' + (k.cls || '') + '" onclick="sendKey(\'' + k.name + '\')">' + k.name + '</button>';
+  });
+  document.getElementById('keyGrid').innerHTML = html;
+}
+
+renderGrid();
+refreshProfiles();
+refreshStatus();
+</script>
 </body>
 </html>
