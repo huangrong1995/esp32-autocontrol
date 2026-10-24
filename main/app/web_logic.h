@@ -62,6 +62,18 @@ static inline int web_profile_known_keys(const ir_profile_t *p)
 }
 
 /*
+ * Validate a profile id from a client request BEFORE truncating it to the
+ * uint8_t stored in NVS / indexing ir_db. `count` is ir_db_get_profile_count()
+ * at the call site. A uint32_t id >= count (e.g. 256 when there are 4 profiles)
+ * must be rejected: casting it to uint8_t first would silently wrap it to
+ * 0..count-1 and send the WRONG profile's key. Returns non-zero when valid.
+ */
+static inline int web_profile_id_valid(uint32_t id, uint32_t count)
+{
+    return (id < count);
+}
+
+/*
  * Format the JSON payload of GET /api/status:
  *   {"paired_profile":N,"paired_name":"...","macros":[]}
  *

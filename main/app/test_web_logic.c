@@ -89,6 +89,18 @@ int main(void)
     ASSERT(web_parse_key_name("POWER") == IR_KEY_POWER,
            "parse is stateless across calls after error cases");
 
+    /* Test 6: profile_id must be range-checked as uint32 BEFORE any cast to
+     * uint8_t. 256/512/65536 with 4 profiles all wrap to 0 on a uint8 cast —
+     * they must be rejected (review finding on web_server.cc pairing path). */
+    ASSERT(web_profile_id_valid(0, 4) != 0, "profile 0 of 4 must be valid");
+    ASSERT(web_profile_id_valid(3, 4) != 0, "profile 3 of 4 must be valid");
+    ASSERT(web_profile_id_valid(4, 4) == 0, "profile 4 of 4 must be invalid (>= count)");
+    ASSERT(web_profile_id_valid(256, 4) == 0, "256 must not wrap to profile 0");
+    ASSERT(web_profile_id_valid(512, 4) == 0, "512 must not wrap to profile 0");
+    ASSERT(web_profile_id_valid(65536, 4) == 0, "65536 must not wrap to profile 0");
+    ASSERT(web_profile_id_valid(0xFF000000u, 4) == 0, "huge uint32 id must be invalid");
+    ASSERT(web_profile_id_valid(3, 0) == 0, "empty library: any id invalid");
+
     printf("WEB_LOGIC_SELFTEST_PASS\n");
     return 0;
 }

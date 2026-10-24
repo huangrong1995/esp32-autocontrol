@@ -245,7 +245,7 @@ static esp_err_t handle_api_pair(httpd_req_t *req)
     if (!jget_uint(body, (size_t)len, "profile_id", &pid)) {
         return send_json(req, "400 Bad Request", "{\"error\":\"invalid body\"}");
     }
-    if (pid >= ir_db_get_profile_count()) {
+    if (!web_profile_id_valid(pid, ir_db_get_profile_count())) {
         return send_json(req, "400 Bad Request", "{\"error\":\"invalid profile\"}");
     }
     remote_state_set_profile((uint8_t)pid);
@@ -276,6 +276,11 @@ static esp_err_t handle_api_key(httpd_req_t *req)
     const ir_profile_t *p = NULL;
     uint32_t explicit_pid = 0;
     if (jget_uint(body, (size_t)len, "profile_id", &explicit_pid)) {
+        /* Range-check the uint32_t BEFORE the uint8_t cast: a value >= count
+         * (e.g. 256 with 4 profiles) must 400, not wrap to profile 0. */
+        if (!web_profile_id_valid(explicit_pid, ir_db_get_profile_count())) {
+            return send_json(req, "400 Bad Request", "{\"error\":\"invalid profile\"}");
+        }
         p = ir_db_get_profile((uint8_t)explicit_pid);
         if (p == NULL) {
             return send_json(req, "400 Bad Request", "{\"error\":\"invalid profile\"}");
