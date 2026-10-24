@@ -61,7 +61,19 @@
   #statusline { color: var(--muted); font-size: 13px; min-height: 18px; margin: 8px 2px; }
   #statusline.error { color: var(--danger); }
   #statusline.ok { color: var(--ok); }
-  .macro-placeholder { color: var(--muted); font-size: 13px; margin: 0; }
+  .macro {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 0; border-top: 1px solid var(--border);
+  }
+  .macro:first-of-type { border-top: none; }
+  .macro .macro-name { flex: 1 1 120px; font-size: 14px; }
+  .macro .macro-note { font-size: 12px; color: var(--muted); }
+  .macro-empty { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  button.del { background: var(--danger); }
+  button.cancel { background: #6b7280; }
+  .playing { color: var(--ok); font-size: 13px; margin-left: 8px; }
+  .rec-hint { color: var(--danger); font-size: 13px; margin: 0 0 8px; }
+  #macroRecControl { margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -82,7 +94,8 @@
 
   <section>
     <h2>③ 宏</h2>
-    <p class="macro-placeholder">宏录制 / 一键回放将在下一版本开放。</p>
+    <div id="macroList"></div>
+    <div id="macroRecControl"></div>
   </section>
 
 <script>
@@ -101,8 +114,58 @@ function api(url, opts) {
   });
 }
 
+var lastStatus = null;      /* latest /api/status payload (recording routing) */
+var playTimer = null;       /* 1s playback-progress poller */
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderMacros(d) {
+  var list = document.getElementById('macroList');
+  var macros = d.macros || [];
+  if (macros.length === 0) {
+    list.innerHTML = '<p class="macro-empty">还没有宏 — 点下面「开始录制」录第一个</p>';
+  } else {
+    var html = '';
+    macros.forEach(function (m) {
+      html += '<div class="macro">' +
+        '<span class="macro-name">' + esc(m.name) + '</span>' +
+        '<span class="macro-note">' + m.step_count + ' 步 · 首键 ' + esc(m.first_key || '—') + '</span>' +
+        '<button onclick="playMacro(' + m.id + ')">播放</button>' +
+        '<button class="del" onclick="deleteMacro(' + m.id + ')">删除</button>' +
+        '</div>';
+    });
+    list.innerHTML = html;
+  }
+
+  var st = d.playback || {};
+  var ctl = document.getElementById('macroRecControl');
+  if (st.state === 'recording') {
+    ctl.innerHTML =
+      '<p class="rec-hint">录制中… 点遥控器按键录入手势,完成后保存</p>' +
+      '<button onclick="saveMacro()">停止并保存</button> ' +
+      '<button class="cancel" onclick="cancelMacro()">取消</button>';
+  } else {
+    ctl.innerHTML = '<button onclick="startMacro()">开始录制</button>' +
+      (st.state === 'playing' ? '<span class="playing">回放中:第 ' + (st.current_step || 0) + ' 步</span>' : '');
+  }
+}
+
+function syncPlaybackPolling(d) {
+  var playing = (d.playback || {}).state === 'playing';
+  if (playing && !playTimer) {
+    playTimer = setInterval(refreshStatus, 1000);
+  } else if (!playing && playTimer) {
+    clearInterval(playTimer);
+    playTimer = null;
+  }
+}
+
 function refreshStatus() {
   api('/api/status').then(function (d) {
+    lastStatus = d;
     var el = document.getElementById('pairedName');
     if (d.paired_profile === 255) {
       el.textContent = '未配对';
@@ -111,6 +174,8 @@ function refreshStatus() {
       el.textContent = d.paired_name || ('档 #' + d.paired_profile);
       el.className = '';
     }
+    renderMacros(d);
+    syncPlaybackPolling(d);
   }).catch(function (e) { setStatus('读取状态失败: ' + e.message, 'error'); });
 }
 
@@ -146,9 +211,67 @@ function pair(id) {
 }
 
 function sendKey(name) {
+  /* 录制中:按键同时录成宏步骤并照常发送,由 /api/macro/step 一次完成。 */
+  if (lastStatus && lastStatus.playback && lastStatus.playback.state === 'recording') {
+    api('/api/macro/step', { method: 'POST', body: JSON.stringify({ key: name }) })
+      .then(function () { setStatus('已录制并发送 ' + name, 'ok'); })
+      .catch(function (e) { setStatus('录制按键失败: ' + e.message, 'error'); });
+    return;
+  }
   api('/api/key', { method: 'POST', body: JSON.stringify({ key: name }) })
     .then(function () { setStatus('已发送 ' + name, 'ok'); })
     .catch(function (e) { setStatus('发送失败: ' + e.message, 'error'); });
+}
+
+/* ---- 宏:录制 / 保存 / 回放 / 删除 ---- */
+
+function findMacro(id) {
+  if (!lastStatus || !lastStatus.macros) return null;
+  for (var i = 0; i < lastStatus.macros.length; i++) {
+    if (lastStatus.macros[i].id === id) return lastStatus.macros[i];
+  }
+  return null;
+}
+
+function startMacro() {
+  api('/api/macro/start', { method: 'POST', body: '{}' })
+    .then(function () { setStatus('录制中… 点遥控器按键', 'ok'); refreshStatus(); })
+    .catch(function (e) { setStatus('开始录制失败: ' + e.message, 'error'); });
+}
+
+function saveMacro() {
+  var name = window.prompt('给这个宏起个名字(最多 23 字):', '');
+  if (name === null) return;                     /* 用户取消 */
+  name = name.trim();
+  if (!name) { setStatus('宏名不能为空', 'error'); return; }
+  if (name.length > 23) { setStatus('宏名太长,最多 23 字', 'error'); return; }
+  api('/api/macro/save', { method: 'POST', body: JSON.stringify({ name: name }) })
+    .then(function () { setStatus('宏已保存: ' + name, 'ok'); refreshStatus(); })
+    .catch(function (e) { setStatus('保存失败: ' + e.message, 'error'); refreshStatus(); });
+}
+
+function cancelMacro() {
+  api('/api/macro/stop', { method: 'POST', body: '{}' })
+    .then(function () { setStatus('已取消录制', 'ok'); refreshStatus(); })
+    .catch(function (e) { setStatus('取消失败: ' + e.message, 'error'); refreshStatus(); });
+}
+
+function playMacro(id) {
+  var m = findMacro(id);
+  /* 开机宏确认:首键是 POWER 时先问电视是否已关,确认后才开始回放。 */
+  if (m && m.first_key === 'POWER') {
+    if (!window.confirm('本宏从开机开始,电视现在是否已关闭?')) return;
+  }
+  api('/api/macro/play', { method: 'POST', body: JSON.stringify({ id: id }) })
+    .then(function () { setStatus('开始回放宏', 'ok'); refreshStatus(); })
+    .catch(function (e) { setStatus('回放失败: ' + e.message, 'error'); refreshStatus(); });
+}
+
+function deleteMacro(id) {
+  if (!window.confirm('确定删除这个宏?')) return;
+  api('/api/macro/delete', { method: 'POST', body: JSON.stringify({ id: id }) })
+    .then(function () { setStatus('已删除宏', 'ok'); refreshStatus(); })
+    .catch(function (e) { setStatus('删除失败: ' + e.message, 'error'); refreshStatus(); });
 }
 
 /* 23 键布局(POWER 跨整行)。按键名称必须与固件 web_parse_key_name 完全一致。 */
