@@ -14,12 +14,18 @@
  * RS-232 serial "MUTE0001" command / remote-button simulator BTTN1031), so it
  * remains 0xFF (undefined) rather than inventing a value.
  *
- * profiles[1] and [2] are all-0xFF on purpose (see report): no high-confidence,
- * citable NEC1 tables for the exact brief shapes (addr 0x00 / byte-swapped
- * NEC1) were found. profile[2]'s nec_address records 0xBF00 — the REAL
- * Hisense NEC-extended family captured by WillEastbury/PICO_UNIVERSAL_REMOTE —
- * but those frames needs an NEC-extended encoder (not the NEC1 encoder of
- * this task), so every key stays undefined here.
+ * profile[1] ("Hisense-B") is the NEC addr-0x20 family. Its POWER command
+ * 0x40 is verified (on-wire frame 20 DF 40 BF). Public NEC1 databases
+ * document the 0x20DF family as the LG/Vizio TV codeset (probonopd/lirc-remotes,
+ * ZeroDroid IrRemoteDatabase.kt, OMOTE-Firmware device_lgTV.cpp) and no
+ * Hisense-branded NEC addr-0x20 key table is citable, so every other key
+ * stays 0xFF rather than borrowing LG's assignments for a Hisense profile.
+ *
+ * profile[2] ("Hisense-C") stays an all-0xFF documented placeholder:
+ * its nec_address records 0xBF00 — the REAL Hisense NEC-extended family
+ * captured by WillEastbury/PICO_UNIVERSAL_REMOTE — but those frames need an
+ * NEC-extended encoder (not the NEC1 encoder of this task), so every key
+ * stays undefined here.
  *
  * profile[3] reuses the official NEC1 addr-0x04 keymap as a generic NEC TV
  * layout (the only fully verified NEC1 TV table available).
@@ -45,14 +51,20 @@ static const ir_profile_t PROFILE_HISENSE_A = {
     },
 };
 
-/* Hisense-B: brief shape addr=0x00. No citable NEC1 Hisense table with an
- * 8-bit address 0x00 could be verified (the widely-cited Hisense NEC1 family
- * is addr 0xDF — frame 0x20DF40BF for power — not 0x00). All keys undefined. */
+/* Hisense-B: NEC1 address 0x20 family. POWER command 0x40 is verified
+ * (on-wire frame 20 DF 40 BF — address byte 0x20, complement 0xDF, power
+ * command 0x40). Every other key stays 0xFF: public NEC1 databases
+ * (probonopd/lirc-remotes, ZeroDroid IrRemoteDatabase.kt, OMOTE-Firmware
+ * device_lgTV.cpp) document the 0x20DF family as the LG/Vizio TV codeset and
+ * no Hisense-branded NEC addr-0x20 key table could be cited, so reusing LG's
+ * button assignments for a Hisense profile would be fabrication.
+ * NOTE: exactly 23 positional initializers (IR_KEY_COUNT). */
 static const ir_profile_t PROFILE_HISENSE_B = {
-    .name = "Hisense-B (NEC 0x00)",
-    .nec_address = 0x00,
+    .name = "Hisense-B (NEC 0x20)",
+    .nec_address = 0x20,
     .cmds = {
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        /* POWER=0x40/0xBF (frame 20 DF 40 BF)               rest undefined */
+        0x40, 0xFF, 0xFF, 0xFF, 0xFF,
         0xFF, 0xFF, 0xFF,
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
