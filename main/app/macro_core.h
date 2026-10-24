@@ -16,28 +16,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "ir/ir_encoder.h"   /* ir_key_t */
-
-/* ---- data structures (brief Step 1) ---- */
-
-typedef struct {
-    ir_key_t  key;
-    uint32_t  wait_ms;   /* ms to wait BEFORE sending `key` */
-} macro_step_t;
-
-typedef struct {
-    uint8_t   id;
-    char      name[24];
-    uint16_t  step_count;
-    ir_key_t  first_key;
-} macro_info_t;
-
-/* ---- limits ---- */
-#define MACRO_MAX_STEPS      100u   /* brief Step 2: temp steps array cap */
-#define MACRO_INDEX_MAX       16u   /* max macros in the NVS index */
-#define MACRO_MAX_ID         255u   /* exclusive: ids 0..254, full-wipe at 255 */
-#define MACRO_STEP_ENCODED_BYTES 5u /* per-step blob: u32le wait + u8 key */
-#define MACRO_REPLAY_SLEEP_CHUNK_MS 50u /* interruptible wait granularity */
+#include "app/macro_types.h"   /* macro_step_t, macro_info_t, limits */
 
 /* ---- NVS blob (de)serialization (explicit little-endian layout) ----
  *

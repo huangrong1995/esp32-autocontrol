@@ -1,6 +1,7 @@
 #include "app/web_server.h"
 #include "app/web_logic.h"
 #include "app/remote_state.h"
+#include "app/macro_engine.h"
 #include "ir/ir_db.h"
 #include "ir/ir_encoder.h"
 
@@ -8,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_http_server.h"
 
 static const char *TAG = "web_server";
@@ -211,8 +213,19 @@ static esp_err_t handle_api_status(httpd_req_t *req)
     if (p == NULL) {
         pid = 0xFF; /* stale/invalid stored id -> treat as unpaired */
     }
-    char buf[160];
-    web_format_status(pid, (p != NULL) ? p->name : "", buf, sizeof(buf));
+    char buf[1600];
+    const char *state = MACRO_STATE_STR_IDLE;
+    switch (macro_get_state()) {
+    case MACRO_STATE_RECORDING: state = MACRO_STATE_STR_RECORDING; break;
+    case MACRO_STATE_PLAYING:   state = MACRO_STATE_STR_PLAYING;   break;
+    default: break;
+    }
+    macro_info_t macros[MACRO_INDEX_MAX];
+    uint8_t mac_count = 0;
+    macro_macros_snapshot(macros, MACRO_INDEX_MAX, &mac_count);
+    web_format_status(pid, (p != NULL) ? p->name : "",
+                      macros, mac_count, state,
+                      (unsigned)macro_get_playback_step(), buf, sizeof(buf));
     return send_json(req, "200 OK", buf);
 }
 
@@ -254,6 +267,8 @@ static esp_err_t handle_api_pair(httpd_req_t *req)
     return send_json(req, "200 OK", out);
 }
 
+static int64_t s_rec_step_last_us;   /* last recorded step's us timestamp */
+
 static esp_err_t handle_api_key(httpd_req_t *req)
 {
     char body[128];
@@ -269,6 +284,26 @@ static esp_err_t handle_api_key(httpd_req_t *req)
     if (key < 0) {
         return send_json(req, "400 Bad Request", "{\"error\":\"unknown key\"}");
     }
+
+    /* Recording hook: any single key press while RECORDING appends a macro
+     * step (wait_ms = time since the previous step, or since start for the
+     * first). The key is sent below regardless, so the user sees live
+     * feedback. The step is recorded even when the key is undefined in the
+     * paired profile — a macro may target another profile's layout later and
+     * the core treats keys as opaque. */
+    if (macro_is_recording()) {
+        int64_t now = esp_timer_get_time();
+        uint32_t wait_ms = (uint32_t)((now - s_rec_step_last_us) / 1000ll);
+        s_rec_step_last_us = now;
+        (void)macro_record_step((ir_key_t)key, wait_ms);
+    }
+
+    /* Abort hook (急停): ANY recognized key press interrupts active macro
+     * playback. macro_interrupt() is a safe no-op when not playing and does
+     * NOT disturb a recording (unlike macro_stop); it fires before the key is
+     * sent so the pressed key is emitted exactly once, below — the playback
+     * task never sends the interrupting key. */
+    (void)macro_interrupt();
 
     /* Which profile to send through:
      *  - optional "profile_id" in the body -> that profile (pairing power test);
@@ -297,6 +332,7 @@ static esp_err_t handle_api_key(httpd_req_t *req)
     if (!ir_db_find_key(p, (ir_key_t)key, &addr, &cmd)) {
         return send_json(req, "400 Bad Request", "{\"error\":\"key undefined in profile\"}");
     }
+
     ir_send_raw_nec(addr, cmd);
 
     char out[80];
@@ -325,6 +361,174 @@ static esp_err_t handle_api_key_raw(httpd_req_t *req)
     char out[80];
     snprintf(out, sizeof(out), "{\"ok\":true,\"address\":%u,\"command\":%u}",
              (unsigned)addr, (unsigned)cmd);
+    return send_json(req, "200 OK", out);
+}
+
+/* ---- Macro REST routes (Task 4b) ---- */
+
+/* Body parser helper: read a bounded JSON body into `buf`; returns length (>=0)
+ * or -1 on empty/oversized bodies. */
+static int macro_read_json_body(httpd_req_t *req, char *buf, size_t cap)
+{
+    int len = read_body(req, buf, cap);
+    if (len <= 0) {
+        return -1;
+    }
+    return len;
+}
+
+static esp_err_t handle_api_macro_start(httpd_req_t *req)
+{
+    char body[64];
+    if (macro_read_json_body(req, body, sizeof(body)) < 0) {
+        /* tolerant: accept empty or arbitrary body */
+    }
+    esp_err_t e = macro_start_recording();
+    if (e != ESP_OK) {
+        return send_json(req, "400 Bad Request",
+                         "{\"error\":\"cannot start recording\"}");
+    }
+    s_rec_step_last_us = esp_timer_get_time();   /* first-step wait baseline */
+    return send_json(req, "200 OK", "{\"ok\":true,\"recording\":true}");
+}
+
+/* Record one step + send it live (mirror of the handle_api_key recording
+ * hook). Requires recording to be active. */
+static esp_err_t handle_api_macro_step(httpd_req_t *req)
+{
+    char body[128];
+    int len = macro_read_json_body(req, body, sizeof(body));
+    if (len < 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
+    }
+    char key_name[16];
+    if (!jget_string(body, (size_t)len, "key", key_name, sizeof(key_name))) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"missing key\"}");
+    }
+    int key = web_parse_key_name(key_name);
+    if (key < 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"unknown key\"}");
+    }
+    if (!macro_is_recording()) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"not recording\"}");
+    }
+    int64_t now = esp_timer_get_time();
+    uint32_t wait_ms = (uint32_t)((now - s_rec_step_last_us) / 1000ll);
+    s_rec_step_last_us = now;
+    esp_err_t e = macro_record_step((ir_key_t)key, wait_ms);
+    if (e != ESP_OK) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"record step failed\"}");
+    }
+
+    /* Live feedback: send the key through the paired profile exactly once. */
+    const ir_profile_t *p = ir_db_get_profile(remote_state_get_profile());
+    if (p != NULL) {
+        uint16_t addr = 0;
+        uint8_t cmd = 0;
+        if (ir_db_find_key(p, (ir_key_t)key, &addr, &cmd)) {
+            ir_send_raw_nec(addr, cmd);
+        }
+    }
+
+    char out[80];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"key\":\"%s\",\"wait_ms\":%lu}",
+             key_name, (unsigned long)wait_ms);
+    return send_json(req, "200 OK", out);
+}
+
+static esp_err_t handle_api_macro_save(httpd_req_t *req)
+{
+    char body[128];
+    int len = macro_read_json_body(req, body, sizeof(body));
+    if (len < 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
+    }
+    char name[MACRO_NAME_CAP];   /* 24 bytes incl NUL; engine requires <= 23 */
+    if (!jget_string(body, (size_t)len, "name", name, sizeof(name))) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"missing name\"}");
+    }
+    if (name[0] == '\0' || strlen(name) >= MACRO_NAME_CAP) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"invalid name\"}");
+    }
+    esp_err_t e = macro_save(name);
+    if (e == ESP_ERR_INVALID_STATE) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"not recording\"}");
+    }
+    if (e != ESP_OK) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"save failed\"}");
+    }
+    char out[80];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"name\":\"%s\"}", name);
+    return send_json(req, "200 OK", out);
+}
+
+static esp_err_t handle_api_macro_play(httpd_req_t *req)
+{
+    char body[128];
+    int len = macro_read_json_body(req, body, sizeof(body));
+    if (len < 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
+    }
+    uint32_t id = 0;
+    if (!jget_uint(body, (size_t)len, "id", &id)) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"missing id\"}");
+    }
+    if (id > 0xFFu) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"invalid id\"}");
+    }
+    esp_err_t e = macro_play((uint8_t)id);
+    if (e == ESP_ERR_NOT_FOUND) {
+        return send_json(req, "404 Not Found", "{\"error\":\"macro not found\"}");
+    }
+    if (e == ESP_ERR_INVALID_STATE) {
+        /* macro_play returns INVALID_STATE for both "unpaired" and "already
+         * playing"; distinguish for a clear client message. */
+        if (macro_is_playing()) {
+            return send_json(req, "400 Bad Request", "{\"error\":\"already playing\"}");
+        }
+        return send_json(req, "400 Bad Request", "{\"error\":\"not paired\"}");
+    }
+    if (e != ESP_OK) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"play failed\"}");
+    }
+    char out[48];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"id\":%lu}", (unsigned long)id);
+    return send_json(req, "200 OK", out);
+}
+
+static esp_err_t handle_api_macro_stop(httpd_req_t *req)
+{
+    char body[64];
+    if (macro_read_json_body(req, body, sizeof(body)) < 0) {
+        /* tolerant: accept empty or arbitrary body */
+    }
+    (void)macro_stop();   /* safe when idle/playing/recording */
+    return send_json(req, "200 OK", "{\"ok\":true,\"state\":\"idle\"}");
+}
+
+static esp_err_t handle_api_macro_delete(httpd_req_t *req)
+{
+    char body[128];
+    int len = macro_read_json_body(req, body, sizeof(body));
+    if (len < 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
+    }
+    uint32_t id = 0;
+    if (!jget_uint(body, (size_t)len, "id", &id)) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"missing id\"}");
+    }
+    if (id > 0xFFu) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"invalid id\"}");
+    }
+    esp_err_t e = macro_delete((uint8_t)id);
+    if (e == ESP_ERR_NOT_FOUND) {
+        return send_json(req, "404 Not Found", "{\"error\":\"macro not found\"}");
+    }
+    if (e != ESP_OK) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"delete failed\"}");
+    }
+    char out[48];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"id\":%lu}", (unsigned long)id);
     return send_json(req, "200 OK", out);
 }
 
@@ -359,6 +563,12 @@ void web_server_start(void)
     REGISTER("/api/pair", HTTP_POST, handle_api_pair);
     REGISTER("/api/key", HTTP_POST, handle_api_key);
     REGISTER("/api/key/raw", HTTP_POST, handle_api_key_raw);
+    REGISTER("/api/macro/start", HTTP_POST, handle_api_macro_start);
+    REGISTER("/api/macro/step", HTTP_POST, handle_api_macro_step);
+    REGISTER("/api/macro/save", HTTP_POST, handle_api_macro_save);
+    REGISTER("/api/macro/play", HTTP_POST, handle_api_macro_play);
+    REGISTER("/api/macro/stop", HTTP_POST, handle_api_macro_stop);
+    REGISTER("/api/macro/delete", HTTP_POST, handle_api_macro_delete);
 #undef REGISTER
 
     ESP_LOGI(TAG, "web server started on 192.168.4.1");

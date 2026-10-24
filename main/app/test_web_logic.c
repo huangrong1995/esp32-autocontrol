@@ -61,35 +61,61 @@ int main(void)
     ASSERT(web_parse_key_name("POWERUP") == -1, "\"POWERUP\" must return -1");
     ASSERT(web_parse_key_name(NULL) == -1, "NULL must not crash, must return -1");
 
-    /* Test 3: unpaired /api/status payload -> paired_profile=0xFF, empty name. */
-    char buf[192];
-    int n = web_format_status(0xFF, "", buf, sizeof(buf));
+    /* Test 3: unpaired /api/status payload -> paired_profile=0xFF, empty name,
+     * empty macros array, idle playback. */
+    char buf[256];
+    int n = web_format_status(0xFF, "", NULL, 0, "idle", 0, buf, sizeof(buf));
     ASSERT(n > 0, "unpaired status format must succeed");
     ASSERT(strstr(buf, "\"paired_profile\":255") != NULL,
            "unpaired status must carry paired_profile=255");
     ASSERT(strstr(buf, "\"paired_name\":\"\"") != NULL,
            "unpaired status must carry empty paired_name");
     ASSERT(strstr(buf, "\"macros\":[]") != NULL,
-           "status must carry the empty macros array (Task 4 fills it)");
+           "status must carry the (empty) macros array");
+    ASSERT(strstr(buf, "\"playback\":{\"state\":\"idle\",\"current_step\":0}") != NULL,
+           "idle status must carry the idle playback block");
 
     /* Test 4: paired status carries the profile id + display name. */
-    n = web_format_status(0, "Hisense-A (NEC 0x04)", buf, sizeof(buf));
+    n = web_format_status(0, "Hisense-A (NEC 0x04)", NULL, 0, "idle", 0,
+                          buf, sizeof(buf));
     ASSERT(n > 0, "paired status format must succeed");
     ASSERT(strstr(buf, "\"paired_profile\":0") != NULL,
            "paired status must carry paired_profile=0");
     ASSERT(strstr(buf, "\"paired_name\":\"Hisense-A (NEC 0x04)\"") != NULL,
            "paired status must carry the profile name");
 
-    /* Test 5: undersized buffer -> -1, no buffer overflow. */
+    /* Test 5: the macros array renders real index entries; first_key uses the
+     * same wire names as web_parse_key_name. */
+    macro_info_t macros[2];
+    macros[0].id = 3;
+    strcpy(macros[0].name, "PowerOff");
+    macros[0].step_count = 2;
+    macros[0].first_key = IR_KEY_POWER;
+    macros[1].id = 7;
+    strcpy(macros[1].name, "VolUp");
+    macros[1].step_count = 1;
+    macros[1].first_key = IR_KEY_VOL_UP;
+    n = web_format_status(1, "Sony-B", macros, 2, "playing", 2, buf, sizeof(buf));
+    ASSERT(n > 0, "status with macros must format");
+    ASSERT(strstr(buf, "\"id\":3,\"name\":\"PowerOff\",\"step_count\":2,\"first_key\":\"POWER\"") != NULL,
+           "macro 0 rendered with wire name POWER");
+    ASSERT(strstr(buf, "\"id\":7,\"name\":\"VolUp\",\"step_count\":1,\"first_key\":\"VOL+\"") != NULL,
+           "macro 1 rendered with wire name VOL+");
+    ASSERT(strstr(buf, "\"playback\":{\"state\":\"playing\",\"current_step\":2}") != NULL,
+           "playing status carries state + current_step");
+    ASSERT(strstr(buf, "\"paired_profile\":1") != NULL,
+           "macro-bearing status still carries paired_profile");
+
+    /* Test 6: undersized buffer -> -1, no buffer overflow. */
     char tiny[8];
-    ASSERT(web_format_status(0xFF, "", tiny, sizeof(tiny)) == -1,
+    ASSERT(web_format_status(0xFF, "", NULL, 0, "idle", 0, tiny, sizeof(tiny)) == -1,
            "truncated status write must return -1");
-    ASSERT(web_format_status(0xFF, "", NULL, 0) == -1,
+    ASSERT(web_format_status(0xFF, "", NULL, 0, "idle", 0, NULL, 0) == -1,
            "NULL/zero-cap status write must return -1");
     ASSERT(web_parse_key_name("POWER") == IR_KEY_POWER,
            "parse is stateless across calls after error cases");
 
-    /* Test 6: profile_id must be range-checked as uint32 BEFORE any cast to
+    /* Test 7: profile_id must be range-checked as uint32 BEFORE any cast to
      * uint8_t. 256/512/65536 with 4 profiles all wrap to 0 on a uint8 cast —
      * they must be rejected (review finding on web_server.cc pairing path). */
     ASSERT(web_profile_id_valid(0, 4) != 0, "profile 0 of 4 must be valid");
