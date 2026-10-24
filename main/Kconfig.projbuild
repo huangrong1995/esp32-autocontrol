@@ -1,0 +1,14 @@
+menu "IR Remote Config"
+config IR_TX_GPIO
+    int "Infrared TX GPIO number"
+    default 4
+    range 0 39
+    help
+        GPIO number connected to the IR transmitter DAT pin.
+config AP_SSID
+    string "SoftAP SSID"
+    default "esp32-ir"
+config AP_PASSWORD
+    string "SoftAP Password (empty = open)"
+    default ""
+endmenu
