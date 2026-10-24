@@ -5,6 +5,12 @@ config IR_TX_GPIO
     range 0 39
     help
         GPIO number connected to the IR transmitter DAT pin.
+config IR_CARRIER_HZ
+    int "IR carrier frequency (Hz)"
+    default 38000
+    range 1000 100000
+    help
+        Infrared carrier frequency for the NEC transmitter (38 kHz typical).
 config AP_SSID
     string "SoftAP SSID"
     default "esp32-ir"
