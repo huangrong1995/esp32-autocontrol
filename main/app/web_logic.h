@@ -105,7 +105,7 @@ static inline void web_escape_json(const char *src, char *dst, size_t cap)
     for (const char *p = src; *p != '\0'; p++) {
         unsigned char c = (unsigned char)*p;
         const char *esc = NULL;          /* short escape: `\` + 1 char */
-        char hex[6];                     /* `\u00XX` (6 chars + NUL below) */
+        char hex[7];                     /* `\u00XX` (6 chars + NUL) */
         switch (c) {
         case '"':  esc = "\\\""; break;
         case '\\': esc = "\\\\"; break;
@@ -119,6 +119,7 @@ static inline void web_escape_json(const char *src, char *dst, size_t cap)
                 hex[0] = '\\'; hex[1] = 'u'; hex[2] = '0'; hex[3] = '0';
                 hex[4] = HEX[(c >> 4) & 0xF];
                 hex[5] = HEX[c & 0xF];
+                hex[6] = '\0';   /* NUL-terminate so strlen(hex) == 6 is safe */
                 esc = hex;
             }
             break;
