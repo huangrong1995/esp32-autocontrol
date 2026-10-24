@@ -1,0 +1,118 @@
+# ESP32 红外一键宏遥控器 (esp32-autocontrol)
+
+一个独立、轻量的 ESP32 红外遥控器:手机连上 ESP32 开的热点,浏览器打开网页即可
+点键发红外;把「开机 → 选台 → 确认」一整套操作录成**宏**,一键回放。配对档位与
+宏数据存在 NVS,断电不丢。
+
+## 功能特性
+
+- **SoftAP 直连**:上电即开热点 `esp32-ir`(默认无密码),手机浏览器访问
+  `http://192.168.4.1` 即可使用,无需路由器/服务器。
+- **内置信号库 + 逐档配对**:内置 4 个信号档(海信 NEC 0x04、通用 NEC 0x20
+  LG/Vizio、Hisense-C 占位、通用 NEC TV),每档可「电源测试」,有反应就「就用这档」。
+- **虚拟遥控器**:POWER / 数字 / 方向 / 确认 / 音量 / 频道 / 静音 / 菜单等 23 键。
+- **宏录制与回放**:录制按键序列与每步等待时间,命名存储(≤23 字),一键回放;
+  回放中实时显示当前步,可随时「停止回放」中断。
+- **开机宏保护**:宏首键是 POWER 时,回放前会弹确认框。
+
+## 硬件接线
+
+| 红外发射模块(三线) | ESP32-WROOM-32 |
+|---|---|
+| VCC | 3.3V |
+| GND | GND |
+| DAT | **GPIO4**(默认,可在 menuconfig 改) |
+
+> 发射模块为 DAT/VCC/GND 三线 IR LED 发射板(非 HX1838 接收头)。经典 ESP32 的
+> GPIO 输出电流有限(约 40mA/最大),大多数模块内置限流电阻可直接驱动;个别需
+> 三极管驱动的模块若距离不足,可加一级驱动电路,代码不受影响。
+
+## 编译
+
+本机使用 ESP-IDF **6.0**(`/home/hrong/workspace/code/esp-idf-6.0`):
+
+```bash
+cd /home/hrong/workspace/code/esp32-autocontrol
+source /home/hrong/workspace/code/esp-idf-6.0/export.sh
+idf.py set-target esp32
+idf.py build
+```
+
+产物:`build/esp32_ir_remote.bin`。工程启用 `MINIMAL_BUILD`,依赖全部为 IDF 内置
+组件(esp_http_server / nvs_flash / RMT / WiFi),无第三方组件。
+
+常用配置(`idf.py menuconfig` → "IR Remote Config"):
+
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `IR_TX_GPIO` | 4 | 红外发射 DAT 引脚 |
+| `IR_CARRIER_HZ` | 38000 | NEC 载波频率(38 kHz) |
+| `AP_SSID` | `esp32-ir` | SoftAP 热点名 |
+| `AP_PASSWORD` | 空 | 留空 = 开放热点 |
+
+## 烧录
+
+```bash
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+烧录成功串口应出现 `esp32-ir-remote boot OK` 与 SoftAP 启动日志。
+
+## 使用流程
+
+1. **连热点**:给 ESP32 上电,手机连接 Wi-Fi `esp32-ir`(无密码)。若之前连过同名
+   热点,先「忽略此网络」再连。
+2. **打开网页**:手机浏览器访问 `http://192.168.4.1`。
+3. **配对**:在①区,先点某档「电源测试」——电视如果有反应,就点该档「就用这档」;
+   顶部显示当前配对档。换一台电视/信号不中,重做一遍即可。
+4. **遥控**:在②区点任意键,即按当前配对档发出对应红外码。
+5. **录宏**:在③区点「开始录制」→ 在②区按需点键(会实时发红外) → 「停止并保存」,
+   输入名字。录制中可「取消」放弃。
+6. **回放**:在宏列表点「播放」;若宏首键是 POWER,会先弹确认(电视是否已关闭)。
+   回放中可点「停止回放」中断,或等待播完。
+7. **删除宏**:点「删除」并确认。
+
+## REST API 一览
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/api/status` | 当前配对档、宏列表、回放/录制状态 |
+| GET | `/api/profiles` | 信号库档列表(含每档是否全键可用) |
+| POST | `/api/pair` | 配对标定档 `{"profile_id":N}` |
+| POST | `/api/key` | 立即发一个键 `{"key":"POWER"}`(可带 `profile_id` 做电源测试) |
+| POST | `/api/key/raw` | 发原始 NEC 帧 `{"address":0x04,"command":0x1F}`(开发/码源验证) |
+| POST | `/api/macro/start` / `step` / `save` / `play` / `stop` / `delete` | 宏录制/回放/删除 |
+
+错误统一返回 `{"error":"..."}`(英文串,网页端会显示为中文提示)。
+
+## 常见问题
+
+- **电视没反应**
+  - 确认发射头对准电视、接线正确(DAT→GPIO4)、模块供电正常。
+  - 不同品牌/型号的红外码组不同:在①区逐个换档测试。
+  - 若内置 4 档都不中,可从公开码库(LIRC、IRremoteESP8266、SmartIR 等)查你的
+    电视真实 NEC 地址/命令,用 `/api/key/raw` 直接试帧(开发者调试入口)。
+  - 注意「电源」键有些电视是离散开关码,重复按不一定每下都有反应。
+- **如何中断回放**:网页宏区点「停止回放」。回放中按键网格会禁用(急停不应通过
+  点按键触发),需用「停止回放」按钮。
+- **分区与存储**:自定义分区表 `partitions/4m.csv` —— `nvs`(0x9000 起,32KB)、
+  `phy_init`、`factory` 应用分区(0x20000 起,约 1.9MB)。配对档、宏索引与步骤
+  都存在 NVS,**断电不丢**。容量:最多 16 条宏,每条 ≤ 100 步。
+- **编译报错/环境**:确认先 `source export.sh` 再 `idf.py`;工程目标为 `esp32`
+  (4MB Flash),不要切到其他目标。
+- **连不上热点**:确认串口/供电正常;手机连接开放热点时若提示无互联网属正常,
+  浏览器直接访问 `192.168.4.1`。
+
+## 本地自测(无硬件)
+
+固件把可测的纯逻辑(编码器 / HTTP 分发 / 宏核心)做成 host 自测,用普通 `cc`
+即可跑:
+
+```bash
+cc -Wall -DIR_SELFTEST   -I main -o /tmp/ir    main/ir/test_ir_encoder.c   && /tmp/ir
+cc -Wall -DWEB_LOGIC_SELFTEST -I main -o /tmp/wl main/app/test_web_logic.c && /tmp/wl
+cc -Wall -I main -o /tmp/macro main/app/test_macro_engine.c                && /tmp/macro
+```
+
+通过时分别输出 `IR_SELFTEST_PASS` / `WEB_LOGIC_SELFTEST_PASS` /
+`MACRO_SELFTEST_PASS` 且退出码 0。

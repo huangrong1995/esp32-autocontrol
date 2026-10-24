@@ -73,6 +73,9 @@
   button.cancel { background: #6b7280; }
   .playing { color: var(--ok); font-size: 13px; margin-left: 8px; }
   .rec-hint { color: var(--danger); font-size: 13px; margin: 0 0 8px; }
+  .pair-hint { color: var(--muted); font-size: 13px; margin: 0 0 8px; text-align: center; }
+  #keyGrid.playing button { opacity: .45; pointer-events: none; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
   #macroRecControl { margin-top: 8px; }
 </style>
 </head>
@@ -89,6 +92,7 @@
 
   <section>
     <h2>② 遥控器</h2>
+    <div id="pairHint" class="pair-hint">连接设备中…</div>
     <div class="grid" id="keyGrid"></div>
   </section>
 
@@ -106,12 +110,49 @@ function setStatus(msg, kind) {
 }
 
 function api(url, opts) {
-  return fetch(url, opts).then(function (r) {
-    return r.json().catch(function () { return {}; }).then(function (data) {
-      if (!r.ok) { throw new Error(data.error || ('HTTP ' + r.status)); }
-      return data;
+  return fetch(url, opts)
+    .catch(function () {
+      /* 网络层失败(热点断开等):fetch 的原始报错是浏览器英文,统一转成中文。 */
+      throw new Error('无法连接设备 — 请确认手机已连上 esp32-ir 热点');
+    })
+    .then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (!r.ok) { throw new Error(friendlyMsg(data.error) || ('HTTP ' + r.status)); }
+        return data;
+      });
     });
-  });
+}
+
+/* 把常见服务器错误(英文 JSON 字段)映射成人性化中文;未知的保留原文。 */
+var SERVER_ERRORS = {
+  'not paired': '未配对 — 请先在①配对区「电源测试」并点「就用这档」',
+  'macro not found': '宏不存在（可能已被删除）',
+  'invalid name': '宏名不合法',
+  'missing name': '缺少宏名',
+  'missing id': '缺少宏 ID',
+  'invalid id': '宏 ID 无效',
+  'already playing': '正在回放中，请先停止',
+  'recording in progress': '正在录制中，请先停止并保存或取消',
+  'cannot start recording': '当前状态无法开始录制',
+  'not recording': '当前没有在录制',
+  'save failed': '保存失败，请重试',
+  'record step failed': '这个按键没有录上，请重试',
+  'play failed': '回放启动失败',
+  'delete failed': '删除失败，请重试',
+  'invalid profile': '信号档无效',
+  'unknown key': '未知按键',
+  'missing key': '缺少按键参数',
+  'empty body': '请求内容为空',
+  'invalid body': '请求格式不正确',
+  'key undefined in profile': '该信号档没有这个按键',
+  'out of range': '数值超出范围',
+  'HTTP 400': '请求无效（400）',
+  'HTTP 404': '资源不存在（404）',
+  'HTTP 500': '服务器出错（500）'
+};
+function friendlyMsg(raw) {
+  if (raw == null) return raw;
+  return SERVER_ERRORS[raw] || raw;
 }
 
 var lastStatus = null;      /* latest /api/status payload (recording routing) */
@@ -147,9 +188,13 @@ function renderMacros(d) {
       '<p class="rec-hint">录制中… 点遥控器按键录入手势,完成后保存</p>' +
       '<button onclick="saveMacro()">停止并保存</button> ' +
       '<button class="cancel" onclick="cancelMacro()">取消</button>';
+  } else if (st.state === 'playing') {
+    /* 回放中:开始录制置灰,显示「停止回放」(网格按键已禁用,这是唯一的停止入口)。 */
+    ctl.innerHTML = '<button disabled>开始录制</button> ' +
+      '<button class="cancel" onclick="stopPlayback()">停止回放</button>' +
+      '<span class="playing">回放中:第 ' + (st.current_step || 0) + ' 步</span>';
   } else {
-    ctl.innerHTML = '<button onclick="startMacro()">开始录制</button>' +
-      (st.state === 'playing' ? '<span class="playing">回放中:第 ' + (st.current_step || 0) + ' 步</span>' : '');
+    ctl.innerHTML = '<button onclick="startMacro()">开始录制</button>';
   }
 }
 
@@ -167,13 +212,19 @@ function refreshStatus() {
   api('/api/status').then(function (d) {
     lastStatus = d;
     var el = document.getElementById('pairedName');
+    var hint = document.getElementById('pairHint');
     if (d.paired_profile === 255) {
       el.textContent = '未配对';
       el.className = 'none';
+      hint.textContent = '未配对 — 请先在①配对区「电源测试」选档并点「就用这档」';
     } else {
       el.textContent = d.paired_name || ('档 #' + d.paired_profile);
       el.className = '';
+      hint.textContent = '';
     }
+    /* 回放中禁用按键网格(急停不应通过点按键触发);录制中网格保持可用。 */
+    document.getElementById('keyGrid')
+      .classList.toggle('playing', (d.playback || {}).state === 'playing');
     renderMacros(d);
     syncPlaybackPolling(d);
   }).catch(function (e) { setStatus('读取状态失败: ' + e.message, 'error'); });
@@ -211,8 +262,13 @@ function pair(id) {
 }
 
 function sendKey(name) {
+  var st = (lastStatus && lastStatus.playback) ? lastStatus.playback.state : 'idle';
+  if (st === 'playing') {
+    setStatus('回放中不可按键 — 请先「停止回放」', 'error');
+    return;
+  }
   /* 录制中:按键同时录成宏步骤并照常发送,由 /api/macro/step 一次完成。 */
-  if (lastStatus && lastStatus.playback && lastStatus.playback.state === 'recording') {
+  if (st === 'recording') {
     api('/api/macro/step', { method: 'POST', body: JSON.stringify({ key: name }) })
       .then(function () { setStatus('已录制并发送 ' + name, 'ok'); })
       .catch(function (e) { setStatus('录制按键失败: ' + e.message, 'error'); });
@@ -234,6 +290,8 @@ function findMacro(id) {
 }
 
 function startMacro() {
+  var st = (lastStatus && lastStatus.playback) ? lastStatus.playback.state : 'idle';
+  if (st === 'playing') { setStatus('回放中不可开始录制 — 请先「停止回放」', 'error'); return; }
   api('/api/macro/start', { method: 'POST', body: '{}' })
     .then(function () { setStatus('录制中… 点遥控器按键', 'ok'); refreshStatus(); })
     .catch(function (e) { setStatus('开始录制失败: ' + e.message, 'error'); });
@@ -254,6 +312,12 @@ function cancelMacro() {
   api('/api/macro/stop', { method: 'POST', body: '{}' })
     .then(function () { setStatus('已取消录制', 'ok'); refreshStatus(); })
     .catch(function (e) { setStatus('取消失败: ' + e.message, 'error'); refreshStatus(); });
+}
+
+function stopPlayback() {
+  api('/api/macro/stop', { method: 'POST', body: '{}' })
+    .then(function () { setStatus('已停止回放', 'ok'); refreshStatus(); })
+    .catch(function (e) { setStatus('停止失败: ' + e.message, 'error'); refreshStatus(); });
 }
 
 function playMacro(id) {
