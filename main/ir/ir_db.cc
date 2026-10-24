@@ -14,12 +14,12 @@
  * RS-232 serial "MUTE0001" command / remote-button simulator BTTN1031), so it
  * remains 0xFF (undefined) rather than inventing a value.
  *
- * profile[1] ("Hisense-B") is the NEC addr-0x20 family. Its POWER command
- * 0x40 is verified (on-wire frame 20 DF 40 BF). Public NEC1 databases
- * document the 0x20DF family as the LG/Vizio TV codeset (probonopd/lirc-remotes,
- * ZeroDroid IrRemoteDatabase.kt, OMOTE-Firmware device_lgTV.cpp) and no
- * Hisense-branded NEC addr-0x20 key table is citable, so every other key
- * stays 0xFF rather than borrowing LG's assignments for a Hisense profile.
+ * profile[1] ("Generic NEC 0x20") is the shared NEC addr-0x20 family — the
+ * codeset publicly documented as LG/Vizio (probonopd/lirc-remotes, ZeroDroid
+ * IrRemoteDatabase.kt, OMOTE-Firmware device_lgTV.cpp). It is NOT a Hisense
+ * table: no Hisense-branded NEC addr-0x20 key map is citable, so only
+ * high-confidence keys consistent across the LG/Vizio sources are filled and
+ * the rest stay 0xFF (never fabricated / never mislabelled).
  *
  * profile[2] ("Hisense-C") stays an all-0xFF documented placeholder:
  * its nec_address records 0xBF00 — the REAL Hisense NEC-extended family
@@ -51,22 +51,30 @@ static const ir_profile_t PROFILE_HISENSE_A = {
     },
 };
 
-/* Hisense-B: NEC1 address 0x20 family. POWER command 0x40 is verified
- * (on-wire frame 20 DF 40 BF — address byte 0x20, complement 0xDF, power
- * command 0x40). Every other key stays 0xFF: public NEC1 databases
- * (probonopd/lirc-remotes, ZeroDroid IrRemoteDatabase.kt, OMOTE-Firmware
- * device_lgTV.cpp) document the 0x20DF family as the LG/Vizio TV codeset and
- * no Hisense-branded NEC addr-0x20 key table could be cited, so reusing LG's
- * button assignments for a Hisense profile would be fabrication.
+/* Generic NEC 0x20: the shared NEC addr-0x20 ("0x20DF") family that public
+ * NEC1 databases document as the LG/Vizio TV codeset:
+ *   probonopd/lirc-remotes (lg/VF28.xml, lg/EC970W.xml, vizio/VUR8.xml),
+ *   ZeroDroid IrRemoteDatabase.kt, OMOTE-Firmware device_lgTV.cpp.
+ * This is NOT a Hisense table (no citable Hisense addr-0x20 key map exists);
+ * it fills only high-confidence keys consistent across those sources.
+ * On-wire frames are 20 DF <cmd> <~cmd>:
+ *   power 0x10 (20DF10EF)  vol+ 0x40 (20DF40BF)  vol- 0xC0 (20DFC03F)
+ *   mute  0x90 (20DF906F)  ch+  0x00 (20DF00FF)  ch-  0x80 (20DF807F)
+ *   menu  0xC2 (20DFC23D)
+ * Arrows/OK/exit/digits have no unambiguous, citable per-key semantics for
+ * this family in the sources above, so they stay 0xFF (never fabricated).
  * NOTE: exactly 23 positional initializers (IR_KEY_COUNT). */
-static const ir_profile_t PROFILE_HISENSE_B = {
-    .name = "Hisense-B (NEC 0x20)",
+static const ir_profile_t PROFILE_GENERIC_NEC_0X20 = {
+    .name = "Generic NEC 0x20 (LG/Vizio)",
     .nec_address = 0x20,
     .cmds = {
-        /* POWER=0x40/0xBF (frame 20 DF 40 BF)               rest undefined */
-        0x40, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF,
+        /* POWER=0x10  VOL+=0x40  VOL-=0xC0  CH+=0x00  CH-=0x80 */
+        0x10, 0x40, 0xC0, 0x00, 0x80,
+        /* MUTE=0x90  MENU=0xC2  EXIT: undefined */
+        0x90, 0xC2, 0xFF,
+        /* OK/UP/DOWN/LEFT/RIGHT: undefined (no citable per-key semantics) */
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        /* digits 0-9: undefined */
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
     },
 };
@@ -103,7 +111,7 @@ static const ir_profile_t PROFILE_GENERIC_NEC_TV = {
 
 static const ir_profile_t *const PROFILES[] = {
     &PROFILE_HISENSE_A,
-    &PROFILE_HISENSE_B,
+    &PROFILE_GENERIC_NEC_0X20,
     &PROFILE_HISENSE_C,
     &PROFILE_GENERIC_NEC_TV,
 };
