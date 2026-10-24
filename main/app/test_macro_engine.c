@@ -237,6 +237,63 @@ int main(void)
     ASSERT(macro_core_record_first_key() == IR_KEY_COUNT,
            "reset clears first_key back to 'none'");
 
+    /* === Test 5a: id counter survives a load (Critical finding regression) ===
+     * Pin: macro_core_index_reset() (what load_from_nvs does) must NOT erase
+     * the id counter — after load resets the index and restores the counter
+     * via macro_core_index_set_next_id(), the next save must get a fresh id
+     * (1), NOT recycled id 0. Save #1 -> alpha(id 0), counter 1; load resets;
+     * counter restored to 1; save #2 -> beta must get id 1. */
+
+    macro_core_index_reset();
+    uint8_t l_id = 0;
+    ASSERT(macro_core_index_add("alpha", 1, IR_KEY_POWER, &l_id) == 0,
+           "alpha add succeeds");
+    ASSERT(l_id == 0, "alpha gets id 0");
+    uint8_t saved_next = macro_core_index_get_next_id();
+    ASSERT(saved_next == 1, "next_id advanced to 1 after alpha");
+
+    /* Mimic a reboot + macro_index_load_from_nvs(): the load resets the
+     * index (count 0), re-reads the stored blob straight back into the array
+     * (reset only zeroes count/next_id, so slot 0 still holds alpha; restore
+     * the entry count as nvs_get_blob + the count assignment do), then — with
+     * the fix — restores the stored next-id counter. */
+    macro_core_index_reset();
+    macro_core_index_count = 1;              /* blob re-read (slot[0]=alpha id 0) */
+    macro_core_index_set_next_id(saved_next);/* counter restore */
+    uint8_t l_id2 = 0;
+    ASSERT(macro_core_index_add("beta", 1, IR_KEY_OK, &l_id2) == 0,
+           "beta add succeeds after load/restore");
+    ASSERT(l_id2 == 1 && l_id2 != 0, "beta gets id 1, NOT recycled id 0");
+    {
+        const macro_info_t *a = macro_core_index_get_by_id(0);
+        const macro_info_t *b = macro_core_index_get_by_id(1);
+        ASSERT(a != NULL && strcmp(a->name, "alpha") == 0,
+               "id 0 resolves to alpha");
+        ASSERT(b != NULL && strcmp(b->name, "beta") == 0,
+               "id 1 resolves to beta");
+    }
+    ASSERT(macro_core_index_get_count() == 2, "count == 2 after alpha+beta");
+
+    /* === Test 5b: full-wipe at 255 (counter persistence + wipe path) === */
+
+    macro_core_index_reset();
+    uint8_t w_id = 0;
+    for (unsigned i = 0; i < 255; i++) {
+        ASSERT(macro_core_index_add("W", 1, IR_KEY_OK, &w_id) == 0,
+               "wipe-loop add succeeds");
+        ASSERT(macro_core_index_remove(w_id) == 0,
+               "wipe-loop remove succeeds");
+    }
+    ASSERT(macro_core_index_get_next_id() == 255,
+           "255 add+remove leaves the counter at 255");
+    ASSERT(macro_core_index_get_count() == 0,
+           "index empty before the wipe-triggering add");
+    ASSERT(macro_core_index_add("last", 1, IR_KEY_OK, &w_id) == 0,
+           "add at counter 255 succeeds (full-wipe)");
+    ASSERT(w_id == 0, "post-wipe id restarts at 0");
+    ASSERT(macro_core_index_get_count() == 1,
+           "index count == 1 after the wipe-triggering add");
+
     printf("MACRO_SELFTEST_PASS\n");
     return 0;
 }

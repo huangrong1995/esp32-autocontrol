@@ -75,6 +75,7 @@
   .rec-hint { color: var(--danger); font-size: 13px; margin: 0 0 8px; }
   .pair-hint { color: var(--muted); font-size: 13px; margin: 0 0 8px; text-align: center; }
   #keyGrid.playing button { opacity: .45; pointer-events: none; }
+  #profileList.playing button { opacity: .45; pointer-events: none; }
   button:disabled { opacity: .45; cursor: not-allowed; }
   #macroRecControl { margin-top: 8px; }
 </style>
@@ -145,10 +146,7 @@ var SERVER_ERRORS = {
   'empty body': '请求内容为空',
   'invalid body': '请求格式不正确',
   'key undefined in profile': '该信号档没有这个按键',
-  'out of range': '数值超出范围',
-  'HTTP 400': '请求无效（400）',
-  'HTTP 404': '资源不存在（404）',
-  'HTTP 500': '服务器出错（500）'
+  'out of range': '数值超出范围'
 };
 function friendlyMsg(raw) {
   if (raw == null) return raw;
@@ -222,12 +220,16 @@ function refreshStatus() {
       el.className = '';
       hint.textContent = '';
     }
-    /* 回放中禁用按键网格(急停不应通过点按键触发);录制中网格保持可用。 */
-    document.getElementById('keyGrid')
-      .classList.toggle('playing', (d.playback || {}).state === 'playing');
+    /* 回放中禁用按键网格与配对区按钮(急停不应通过点按键触发);录制中保持可用。 */
+    var playing = (d.playback || {}).state === 'playing';
+    document.getElementById('keyGrid').classList.toggle('playing', playing);
+    document.getElementById('profileList').classList.toggle('playing', playing);
     renderMacros(d);
     syncPlaybackPolling(d);
-  }).catch(function (e) { setStatus('读取状态失败: ' + e.message, 'error'); });
+  }).catch(function (e) {
+    setStatus('读取状态失败: ' + e.message, 'error');
+    document.getElementById('pairHint').textContent = '无法连接设备,请检查热点连接';
+  });
 }
 
 function refreshProfiles() {

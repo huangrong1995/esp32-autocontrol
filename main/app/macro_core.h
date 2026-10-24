@@ -195,6 +195,16 @@ static inline void macro_core_index_reset(void)
     macro_core_next_id     = 0;
 }
 
+static inline void macro_core_index_set_next_id(uint8_t v)
+{
+    macro_core_next_id = v;
+}
+
+static inline uint8_t macro_core_index_get_next_id(void)
+{
+    return macro_core_next_id;
+}
+
 static inline uint16_t macro_core_index_get_count(void)
 {
     return macro_core_index_count;

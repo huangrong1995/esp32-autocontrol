@@ -38,6 +38,7 @@ static const char *TAG = "macro_engine";
 
 #define MACRO_NVS_NAMESPACE   "macros"
 #define MACRO_NVS_INDEX_KEY   "macro_index"
+#define MACRO_NVS_NEXT_KEY    "macro_next"
 #define MACRO_STACK_BYTES     4096
 #define MACRO_STACK_WORDS     (MACRO_STACK_BYTES / sizeof(StackType_t))
 #define MACRO_INDEX_BLOB_BYTES (sizeof(macro_info_t) * MACRO_INDEX_MAX)
@@ -79,6 +80,10 @@ static void macro_index_load_from_nvs(void)
     size_t len = MACRO_INDEX_BLOB_BYTES;
     esp_err_t err = nvs_get_blob(h, MACRO_NVS_INDEX_KEY,
                                  macro_core_index, &len);
+    uint8_t v = 0;
+    if (nvs_get_u8(h, MACRO_NVS_NEXT_KEY, &v) == ESP_OK) {
+        macro_core_index_set_next_id(v);
+    }
     nvs_close(h);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         return;   /* no macros stored yet: keep empty index */
@@ -104,6 +109,10 @@ static esp_err_t macro_index_store_to_nvs(void)
     }
     err = nvs_set_blob(h, MACRO_NVS_INDEX_KEY, macro_core_index,
                        macro_core_index_count * sizeof(macro_info_t));
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, MACRO_NVS_NEXT_KEY,
+                         macro_core_index_get_next_id());
+    }
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }
