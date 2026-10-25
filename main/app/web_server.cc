@@ -311,10 +311,11 @@ static esp_err_t handle_api_status(httpd_req_t *req)
 
 static esp_err_t handle_api_profiles(httpd_req_t *req)
 {
-    char buf[640];
+    /* 按 30+ 组预算:~70B/组,NECx 码表会继续增长 */
+    char buf[2048];
     size_t off = buf_append(buf, sizeof(buf), 0, "[");
     uint8_t count = ir_db_get_profile_count();
-    for (uint8_t i = 0; i < count && off < sizeof(buf); i++) {
+    for (uint8_t i = 0; i < count && off < sizeof(buf) - 4u; i++) {
         const ir_profile_t *p = ir_db_get_profile(i);
         const char *name = (p != NULL) ? p->name : "";
         int known = web_profile_known_keys(p);
