@@ -319,6 +319,10 @@ static esp_err_t handle_api_profiles(httpd_req_t *req)
     return send_json(req, "200 OK", buf);
 }
 
+/* 旧资产兼容路径(deprecated):legacy POST /api/pair {profile_id} 仅保留注册,避免老页面 404。
+ * 语义仍是直接写回 legacy paired_profile;但校准档存在(pair_calib_active() 为真)时,
+ * ir_encoder/ir_send_key 已优先使用校准档作为 NEC 地址来源,故旧配对无法干扰新向导。
+ * 新页面请走 /api/pair/start|answer|cancel|resend。 */
 static esp_err_t handle_api_pair(httpd_req_t *req)
 {
     char body[128];
