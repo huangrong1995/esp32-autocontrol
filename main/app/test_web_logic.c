@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "app/web_logic.h"
+#include "app/pair_state.h"
 
 #define ASSERT(cond, msg) \
     do { \
@@ -27,6 +28,16 @@
             return 1; \
         } \
     } while (0)
+
+/* ---- pair 纯函数段(host stub:测试表自造,与固件 ir_db.cc 无关) ---- */
+static const ir_profile_t T_PROF0 = { "T0", 0x04,
+    { 0x5A, 0x5B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
+const ir_profile_t *ir_db_get_profile(uint8_t id)
+{
+    static const ir_profile_t *const T_PROFS[] = { &T_PROF0 };
+    return id < sizeof(T_PROFS) / sizeof(T_PROFS[0]) ? T_PROFS[id] : NULL;
+}
 
 int main(void)
 {
@@ -151,6 +162,31 @@ int main(void)
     ASSERT(n > 0, "status with control chars in macro name must format");
     ASSERT(strstr(buf, "\"name\":\"a\\u0001z\\t\"") != NULL,
            "SOH escapes as \\u0001 and TAB as \\t");
+
+    static uint8_t T_CALIB[IR_KEY_COUNT];
+    for (int i = 0; i < IR_KEY_COUNT; i++) T_CALIB[i] = 0xFF;
+    T_CALIB[IR_KEY_POWER] = 0xA1; T_CALIB[IR_KEY_VOL_UP] = 0xA2;
+
+    uint16_t addr; uint8_t cmd;
+    ASSERT(pair_lookup(T_CALIB, IR_KEY_COUNT, IR_KEY_POWER) == 0xA1, "lookup calib 有码");
+    ASSERT(pair_lookup(T_CALIB, IR_KEY_COUNT, IR_KEY_MUTE) == 0xFF, "lookup calib 无码 → 0xFF");
+    ASSERT(pair_lookup(NULL, 0, IR_KEY_POWER) == 0xFF, "lookup NULL calib → 0xFF");
+    ASSERT(pair_lookup(T_CALIB, IR_KEY_COUNT, IR_KEY_COUNT) == 0xFF, "lookup 越界 → 0xFF");
+    ASSERT(pair_resolve_key(T_CALIB, IR_KEY_COUNT, 0, IR_KEY_POWER, &addr, &cmd) == 1
+           && addr == 0x04 && cmd == 0xA1, "calib 有码 → addr=来源组 nec_address, cmd=calib[key]");
+    ASSERT(pair_resolve_key(T_CALIB, IR_KEY_COUNT, 0, IR_KEY_MUTE, &addr, &cmd) == 0,
+           "calib 键 0xFF → 0 不发送");
+    ASSERT(pair_resolve_key(NULL, 0, 0, IR_KEY_POWER, &addr, &cmd) == 1
+           && addr == 0x04 && cmd == 0x5A, "NULL calib → legacy 原生表");
+    ASSERT(pair_resolve_key(NULL, 0, 0, IR_KEY_MUTE, &addr, &cmd) == 0, "legacy 键 0xFF → 0");
+    ASSERT(pair_resolve_key(NULL, 0, 1, IR_KEY_POWER, &addr, &cmd) == 0,
+           "profile 越界(NULL)→ 0 不崩");
+    ASSERT(pair_resolve_key(T_CALIB, IR_KEY_COUNT, 0, IR_KEY_COUNT, &addr, &cmd) == 0,
+           "key 越界 → 0 不崩");
+    ASSERT(pair_resolve_key(T_CALIB, IR_KEY_COUNT, 0, IR_KEY_POWER, NULL, &cmd) == 0,
+           "NULL addr → 0 不崩");
+    ASSERT(pair_resolve_key(T_CALIB, IR_KEY_COUNT - 1, 0, IR_KEY_POWER, &addr, &cmd) == 1
+           && cmd == 0x5A, "calib len!=23 → 视为 legacy");
 
     printf("WEB_LOGIC_SELFTEST_PASS\n");
     return 0;

@@ -1,6 +1,7 @@
 #include "ir/ir_encoder.h"
 #include "ir/ir_db.h"
 #include "app/remote_state.h"
+#include "app/pair_state.h"
 
 #include <stdio.h>
 #include <stddef.h>
@@ -90,23 +91,33 @@ void ir_send_raw_nec(uint16_t address, uint8_t command)
 
 void ir_send_key(ir_key_t key)
 {
-    uint8_t profile_id = remote_state_get_profile();
-    if (profile_id >= ir_db_get_profile_count()) {
+    uint8_t calib_buf[IR_KEY_COUNT];
+    size_t calib_len = 0;
+    uint8_t profile_id;
+    if (pair_calib_active()) {                 /* 校准档存在 → 来源组提供 NEC 地址 */
+        calib_len = IR_KEY_COUNT;
+        pair_calib_read_nvs(calib_buf);
+        profile_id = pair_calib_group();
+    } else {                                   /* legacy → 原 profile_id 语义不变 */
+        profile_id = remote_state_get_profile();
+    }
+    if (profile_id >= ir_db_get_profile_count()) { /* 同现状:log skip;return; */
         ESP_LOGW(TAG, "no profile paired (id=0x%02X); skip key=%d", profile_id, (int)key);
         return;
     }
 
-    const ir_profile_t *profile = ir_db_get_profile(profile_id);
     uint16_t addr = 0;
     uint8_t cmd = 0;
-    if (profile == NULL || !ir_db_find_key(profile, key, &addr, &cmd)) {
+    if (!pair_resolve_key(calib_len ? calib_buf : NULL, calib_len, profile_id,
+                          key, &addr, &cmd)) {     /* 未定义键:log skip;return; */
+        const ir_profile_t *p = ir_db_get_profile(profile_id);
         ESP_LOGW(TAG, "profile '%s' key=%d undefined; skip",
-                 profile ? profile->name : "?", (int)key);
+                 p ? p->name : "?", (int)key);
         return;
     }
 
-    ESP_LOGI(TAG, "key=%d -> profile '%s' NEC addr=0x%02X cmd=0x%02X",
-             (int)key, profile->name, addr, cmd);
+    ESP_LOGI(TAG, "key=%d -> profile_id=%u NEC addr=0x%02X cmd=0x%02X",
+             (int)key, (unsigned)profile_id, addr, cmd);
     ir_send_raw_nec(addr, cmd);
 }
 
