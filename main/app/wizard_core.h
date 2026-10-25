@@ -62,7 +62,6 @@ static const ir_key_t WIZARD_FUNC_ORDER[WIZARD_FUNC_KEYS] = {
 typedef struct {
     uint8_t group_idx;                 /* current TRY_POWER / locked group */
     uint8_t key_idx;                   /* index into WIZARD_FUNC_ORDER */
-    uint8_t tested_mask;               /* bitmask of groups tired for POWER */
     uint8_t keymap[IR_KEY_COUNT];      /* locked group's codes; 0xFF = no code */
     uint8_t source_group;              /* locked group, or WIZARD_NOMATCH */
     uint8_t phase;                     /* wizard_phase_t */
@@ -78,7 +77,6 @@ static inline void wizard_core_reset(wizard_ctx_t *ctx)
 {
     ctx->group_idx    = 0;
     ctx->key_idx      = 0;
-    ctx->tested_mask  = 0;
     for (int i = 0; i < IR_KEY_COUNT; i++) {
         ctx->keymap[i] = 0xFF;
     }
@@ -134,9 +132,8 @@ static inline wizard_ctx_t *wizard_start(const ir_profile_t *const *groups,
  * (never crashes, never advances). Reacted: lock the current group — prefill
  * keymap with its native cmds (digits inherit), set source_group, key_idx=0,
  * run the settle loop, enter CALIBRATE (or DONE when the group has no native
- * function key at all). Not reacted: mark the group tested and advance to the
- * next untested power-capable group (staying TRY_POWER), or DONE/NOMATCH when
- * none remain.
+ * function key at all). Not reacted: advance to the next power-capable group
+ * (staying TRY_POWER), or DONE/NOMATCH when none remain.
  */
 static inline wizard_ctx_t *wizard_answer_power(wizard_ctx_t *ctx, int reacted)
 {
@@ -155,11 +152,9 @@ static inline wizard_ctx_t *wizard_answer_power(wizard_ctx_t *ctx, int reacted)
                    ? WIZARD_PHASE_DONE : WIZARD_PHASE_CALIBRATE;
         return ctx;
     }
-    ctx->tested_mask |= (uint8_t)(1u << ctx->group_idx);
+    /* 状态机单调前移,不回访,故无需 tested_mask;from group_idx+1 起保证不会重测 */
     for (uint8_t i = (uint8_t)(ctx->group_idx + 1u); i < ctx->group_count; i++) {
-        if ((ctx->tested_mask & (uint8_t)(1u << i)) == 0u &&
-            ctx->groups[i] != NULL &&
-            ctx->groups[i]->cmds[IR_KEY_POWER] != 0xFF) {
+        if (ctx->groups[i] != NULL && ctx->groups[i]->cmds[IR_KEY_POWER] != 0xFF) {
             ctx->group_idx = i;            /* stay TRY_POWER, new group */
             return ctx;
         }
