@@ -743,9 +743,11 @@ static esp_err_t handle_api_pair_resend(httpd_req_t *req)
     }
     /* Idempotent convenience: re-send the current wizard key (page-refresh
      * recovery). With no active wizard (IDLE/DONE) the send is skipped but the
-     * endpoint still answers 200. */
-    (void)wizard_send_current();
-    return send_json(req, "200 OK", "{\"ok\":true,\"sent\":true}");
+     * endpoint still answers 200. `sent` reflects what actually dispatched. */
+    int sent = wizard_send_current();
+    char out[48];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"sent\":%s}", sent ? "true" : "false");
+    return send_json(req, "200 OK", out);
 }
 
 /* ---- Server start ---- */
