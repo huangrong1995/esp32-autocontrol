@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 /* Task 1 enum — keep unchanged. Order must stay stable: ir_db.cc fills
  * cmds[] positionally in this order. */
@@ -81,9 +82,10 @@ extern "C" {
 /* Select the profile id used for ir_send_key() (delegates to remote_state). */
 void ir_set_profile(uint8_t profile_id);
 
-/* Send a logical key via the currently paired profile. No-op + log if the
- * device is not paired or the key is undefined (0xFF) in the profile. */
-void ir_send_key(ir_key_t key);
+/* Send a logical key via the currently paired source (calibration blob if
+ * active, else the paired profile). Returns true iff an NEC frame was
+ * actually transmitted; never sends 0xFF/undefined keys. */
+bool ir_send_key(ir_key_t key);
 
 /* Send a raw NEC frame (address + command) directly. Debug/raw entry point;
  * also the real transmitter behind ir_send_key(). */

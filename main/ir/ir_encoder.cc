@@ -89,7 +89,7 @@ void ir_send_raw_nec(uint16_t address, uint8_t command)
     ESP_LOGI(TAG, "sent NEC addr=0x%02X cmd=0x%02X (%u symbols)", address, command, (unsigned)n);
 }
 
-void ir_send_key(ir_key_t key)
+bool ir_send_key(ir_key_t key)
 {
     uint8_t calib_buf[IR_KEY_COUNT];
     size_t calib_len = 0;
@@ -103,7 +103,7 @@ void ir_send_key(ir_key_t key)
     }
     if (profile_id >= ir_db_get_profile_count()) { /* 同现状:log skip;return; */
         ESP_LOGW(TAG, "no profile paired (id=0x%02X); skip key=%d", profile_id, (int)key);
-        return;
+        return false;
     }
 
     uint16_t addr = 0;
@@ -113,12 +113,13 @@ void ir_send_key(ir_key_t key)
         const ir_profile_t *p = ir_db_get_profile(profile_id);
         ESP_LOGW(TAG, "profile '%s' key=%d undefined; skip",
                  p ? p->name : "?", (int)key);
-        return;
+        return false;
     }
 
     ESP_LOGI(TAG, "key=%d -> profile_id=%u NEC addr=0x%02X cmd=0x%02X",
              (int)key, (unsigned)profile_id, addr, cmd);
     ir_send_raw_nec(addr, cmd);
+    return true;
 }
 
 void ir_set_profile(uint8_t profile_id)

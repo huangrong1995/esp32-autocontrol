@@ -383,9 +383,11 @@ static esp_err_t handle_api_key(httpd_req_t *req)
 
     /* Which profile to send through:
      *  - optional "profile_id" in the body -> that profile (pairing power test);
-     *  - otherwise -> the currently paired profile (normal remote use). */
+     *  - otherwise -> the currently paired source (normal remote use), resolved
+     *    through the unified calib-aware path. */
     const ir_profile_t *p = NULL;
     uint32_t explicit_pid = 0;
+    bool sent = false;
     if (jget_uint(body, (size_t)len, "profile_id", &explicit_pid)) {
         /* Range-check the uint32_t BEFORE the uint8_t cast: a value >= count
          * (e.g. 256 with 4 profiles) must 400, not wrap to profile 0. */
@@ -396,20 +398,35 @@ static esp_err_t handle_api_key(httpd_req_t *req)
         if (p == NULL) {
             return send_json(req, "400 Bad Request", "{\"error\":\"invalid profile\"}");
         }
-    } else {
-        p = ir_db_get_profile(remote_state_get_profile());
-        if (p == NULL) {
-            return send_json(req, "400 Bad Request", "{\"error\":\"not paired\"}");
+        uint16_t addr = 0;
+        uint8_t cmd = 0;
+        sent = ir_db_find_key(p, (ir_key_t)key, &addr, &cmd);
+        if (sent) {
+            ir_send_raw_nec(addr, cmd);
         }
+    } else {
+        /* Normal remote use: resolve through the unified calib-aware path
+         * (calibration blob active -> its keymap; else legacy paired profile).
+         * Never sends 0xFF/undefined keys. */
+        if (!ir_send_key((ir_key_t)key)) {
+            /* Preserve the pre-wizard error contract: "not paired" when nothing
+             * is resolvable at all; "key undefined in profile" when a paired
+             * source exists but this key is not in it. */
+            if (!pair_calib_active() &&
+                remote_state_get_profile() >= ir_db_get_profile_count()) {
+                return send_json(req, "400 Bad Request", "{\"error\":\"not paired\"}");
+            }
+            return send_json(req, "400 Bad Request",
+                             "{\"error\":\"key undefined in profile\"}");
+        }
+        sent = true;
     }
 
-    uint16_t addr = 0;
-    uint8_t cmd = 0;
-    if (!ir_db_find_key(p, (ir_key_t)key, &addr, &cmd)) {
+    if (!sent) {
+        /* only reachable from the explicit-profile_id branch (the else-branch
+         * already returned its own error above) */
         return send_json(req, "400 Bad Request", "{\"error\":\"key undefined in profile\"}");
     }
-
-    ir_send_raw_nec(addr, cmd);
 
     char out[80];
     snprintf(out, sizeof(out), "{\"ok\":true,\"key\":\"%s\"}", key_name);
@@ -496,15 +513,10 @@ static esp_err_t handle_api_macro_step(httpd_req_t *req)
         return send_json(req, "400 Bad Request", "{\"error\":\"record step failed\"}");
     }
 
-    /* Live feedback: send the key through the paired profile exactly once. */
-    const ir_profile_t *p = ir_db_get_profile(remote_state_get_profile());
-    if (p != NULL) {
-        uint16_t addr = 0;
-        uint8_t cmd = 0;
-        if (ir_db_find_key(p, (ir_key_t)key, &addr, &cmd)) {
-            ir_send_raw_nec(addr, cmd);
-        }
-    }
+    /* Live feedback: send the key through the currently paired source exactly
+     * once (calib-aware unified resolution). Silently skips when the key is
+     * undefined or nothing is paired — never sends 0xFF. */
+    (void)ir_send_key((ir_key_t)key);
 
     char out[80];
     snprintf(out, sizeof(out), "{\"ok\":true,\"key\":\"%s\",\"wait_ms\":%lu}",
