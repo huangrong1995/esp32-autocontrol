@@ -192,3 +192,87 @@ static inline int web_format_status(uint8_t paired_profile, const char *paired_n
 #undef APPEND
     return (off < cap) ? (int)off : -1;
 }
+
+/*
+ * Append the wizard + calibration block to an existing NUL-terminated JSON
+ * prefix already stored in `buf` (the caller keeps the leading part of a
+ * document; this function closes nothing). Appends:
+ *   ,"wizard":{"state":"...","group_id":N,"key":"..."}
+ * and, when `keys` != NULL, additionally appends:
+ *   ,"calib_group":N,"keys":[0,1,...]
+ * where each entry is rendered 1 when `keys[i] != 0` and 0 otherwise (the
+ * caller passes raw keymap bytes; this helper normalizes to 0/1). `state` and
+ * `key` are fixed wire values ("idle"/"try_power"/"calibrate"/"done"/"no_match"
+ * and web_key_name() output — plain ASCII, no JSON escaping needed).
+ *
+ * Returns the new offset (index of the NUL terminator), or -1 when the buffer
+ * is too small. Capacity is checked UP FRONT — on overflow nothing is written,
+ * so the caller's existing prefix (and its terminating NUL) is never disturbed
+ * (mirrors web_format_status's APPEND "do not corrupt" contract). `keys == NULL`
+ * omits the `calib_group` field entirely.
+ */
+static inline int web_format_wizard(const char *state, uint8_t group, const char *key,
+                                    const uint8_t *keys,
+                                    uint8_t calib_group,
+                                    char *buf, size_t cap)
+{
+    if (buf == NULL || cap == 0) {
+        return -1;
+    }
+    if (state == NULL) {
+        state = "";
+    }
+    if (key == NULL) {
+        key = "";
+    }
+    size_t off = strlen(buf);
+    if (off >= cap) {
+        return -1;
+    }
+    size_t room = cap - off;   /* includes room for the final NUL */
+
+    /* Up-front sizing: base wizard block + optional calib block. */
+    int n = snprintf(NULL, 0,
+                     ",\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\"}",
+                     state, (unsigned)group, key);
+    if (n < 0) {
+        return -1;
+    }
+    size_t need = (size_t)n;
+    if (keys != NULL) {
+        int m = snprintf(NULL, 0, ",\"calib_group\":%u,\"keys\":[", (unsigned)calib_group);
+        if (m < 0) {
+            return -1;
+        }
+        need += (size_t)m;
+        for (int i = 0; i < IR_KEY_COUNT; i++) {
+            need += (i ? 2u : 1u);   /* ",0" or "0" */
+        }
+        need += 1u;                  /* closing ']' */
+    }
+    if (need + 1u > room) {          /* +1 for the NUL terminator */
+        return -1;                   /* nothing written: prefix untouched */
+    }
+
+#define APPEND(...) do { \
+        if (off >= cap) return -1; \
+        n = snprintf(buf + off, cap - off, __VA_ARGS__); \
+        if (n < 0) return -1; \
+        size_t nn = (size_t)n; \
+        if (nn >= cap - off) return -1; \
+        off += nn; \
+    } while (0)
+
+    APPEND(",\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\"}",
+           state, (unsigned)group, key);
+    if (keys != NULL) {
+        APPEND(",\"calib_group\":%u,\"keys\":[", (unsigned)calib_group);
+        for (int i = 0; i < IR_KEY_COUNT; i++) {
+            APPEND("%s%u", (i ? "," : ""),
+                   (unsigned)((keys[i] != 0u) ? 1u : 0u));
+        }
+        APPEND("]");
+    }
+#undef APPEND
+    return (off < cap) ? (int)off : -1;
+}

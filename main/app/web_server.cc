@@ -2,6 +2,7 @@
 #include "app/web_logic.h"
 #include "app/remote_state.h"
 #include "app/macro_engine.h"
+#include "app/wizard_core.h"
 #include "ir/ir_db.h"
 #include "ir/ir_encoder.h"
 
@@ -128,6 +129,32 @@ static int jget_string(const char *body, size_t len, const char *name,
     return 0; /* unterminated string */
 }
 
+/* Parse a JSON boolean literal (`true` / `false`) for `name`. Returns 1 and
+ * sets *out (0/1) on success. Unlike jget_uint this deliberately does NOT
+ * accept numeric values — the pair-answer contract is `{"reacted":true|false}`
+ * and the frontend sends exactly those literals. */
+static int jget_bool(const char *body, size_t len, const char *name, int *out)
+{
+    size_t vlen = 0;
+    const char *v = jfield(body, len, name, &vlen);
+    if (v == NULL) {
+        return 0;
+    }
+    size_t i = 0;
+    while (i < vlen && jis_space(v[i])) {
+        i++;
+    }
+    if (vlen - i >= 4 && memcmp(v + i, "true", 4) == 0) {
+        *out = 1;
+        return 1;
+    }
+    if (vlen - i >= 5 && memcmp(v + i, "false", 5) == 0) {
+        *out = 0;
+        return 1;
+    }
+    return 0;
+}
+
 /* ---- HTTP response helpers ---- */
 
 static esp_err_t send_json(httpd_req_t *req, const char *status, const char *body)
@@ -213,7 +240,7 @@ static esp_err_t handle_api_status(httpd_req_t *req)
     if (p == NULL) {
         pid = 0xFF; /* stale/invalid stored id -> treat as unpaired */
     }
-    char buf[1600];
+    char buf[2048];
     const char *state = MACRO_STATE_STR_IDLE;
     switch (macro_get_state()) {
     case MACRO_STATE_RECORDING: state = MACRO_STATE_STR_RECORDING; break;
@@ -223,9 +250,54 @@ static esp_err_t handle_api_status(httpd_req_t *req)
     macro_info_t macros[MACRO_INDEX_MAX];
     uint8_t mac_count = 0;
     macro_macros_snapshot(macros, MACRO_INDEX_MAX, &mac_count);
-    web_format_status(pid, (p != NULL) ? p->name : "",
-                      macros, mac_count, state,
-                      (unsigned)macro_get_playback_step(), buf, sizeof(buf));
+    int n = web_format_status(pid, (p != NULL) ? p->name : "",
+                              macros, mac_count, state,
+                              (unsigned)macro_get_playback_step(), buf, sizeof(buf));
+    if (n < 0) {
+        n = (int)strlen(buf);   /* truncated; send what we have below */
+    }
+    if (n <= 0 || buf[n - 1] != '}') {
+        return send_json(req, "200 OK", buf);   /* nothing to splice onto */
+    }
+    const int root_at = n;
+    buf[n - 1] = '\0';   /* drop the root object's closing '}' */
+
+    /* Wizard block: derive state from the per-TU wizard ctx. */
+    const wizard_ctx_t *ctx = &wizard_core_ctx;
+    const char *wstate;
+    switch (ctx->phase) {
+    case WIZARD_PHASE_TRY_POWER:  wstate = "try_power"; break;
+    case WIZARD_PHASE_CALIBRATE:  wstate = "calibrate"; break;
+    case WIZARD_PHASE_DONE:
+        wstate = (ctx->source_group == WIZARD_NOMATCH) ? "no_match" : "done";
+        break;
+    default:                      wstate = "idle";      break;
+    }
+    uint8_t wgroup = (ctx->phase == WIZARD_PHASE_IDLE) ? 0 : ctx->group_idx;
+    const char *wkey = web_key_name(wizard_current_key(ctx));
+
+    /* Calibration block: 0/1 per key, present only when a valid blob exists. */
+    uint8_t calib[IR_KEY_COUNT];
+    uint8_t keys[IR_KEY_COUNT];
+    const uint8_t *keyp = NULL;
+    uint8_t calib_group = 0;
+    if (pair_calib_read_nvs(calib)) {
+        for (int i = 0; i < IR_KEY_COUNT; i++) {
+            keys[i] = (calib[i] != 0xFF) ? 1u : 0u;
+        }
+        keyp = keys;
+        calib_group = pair_calib_group();
+    }
+
+    int wn = web_format_wizard(wstate, wgroup, wkey, keyp, calib_group,
+                               buf, sizeof(buf));
+    if (wn < 0 || (size_t)wn + 2 > sizeof(buf)) {
+        buf[root_at - 1] = '}';   /* restore the base status verbatim */
+        buf[root_at] = '\0';
+        return send_json(req, "200 OK", buf);
+    }
+    buf[wn] = '}';
+    buf[wn + 1] = '\0';
     return send_json(req, "200 OK", buf);
 }
 
@@ -536,6 +608,146 @@ static esp_err_t handle_api_macro_delete(httpd_req_t *req)
     return send_json(req, "200 OK", out);
 }
 
+/* ---- Guided-pairing REST routes (Task 3) ---- */
+
+/*
+ * Send the wizard's current key through the CANDIDATE group, not the paired
+ * profile. During a pairing pass no calibration exists and the device is
+ * usually not paired, so ir_send_key() would resolve against the legacy / NVS
+ * profile (and skip entirely when unpaired); the wizard must test the
+ * candidate group's own native code instead. Only sends when the machine is in
+ * an active phase (TRY_POWER / CALIBRATE) and the current key is defined in the
+ * group. Returns 1 when a frame was actually transmitted.
+ */
+static int wizard_send_current(void)
+{
+    const wizard_ctx_t *ctx = &wizard_core_ctx;
+    if (ctx->phase != WIZARD_PHASE_TRY_POWER &&
+        ctx->phase != WIZARD_PHASE_CALIBRATE) {
+        return 0;
+    }
+    ir_key_t key = wizard_current_key(ctx);
+    if (key == IR_KEY_COUNT || ctx->group_idx >= ctx->group_count) {
+        return 0;
+    }
+    const ir_profile_t *g = ctx->groups[ctx->group_idx];
+    if (g == NULL) {
+        return 0;
+    }
+    uint16_t addr = 0;
+    uint8_t cmd = 0;
+    if (!ir_db_find_key(g, key, &addr, &cmd)) {
+        return 0;   /* undefined in the candidate group: never fabricate */
+    }
+    ir_send_raw_nec(addr, cmd);
+    return 1;
+}
+
+static esp_err_t handle_api_pair_start(httpd_req_t *req)
+{
+    char body[64];
+    int len = read_body(req, body, sizeof(body));
+    if (len <= 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
+    }
+    wizard_ctx_t *ctx = wizard_start(ir_db_profile_table(),
+                                     ir_db_get_profile_count());
+    if (ctx->phase == WIZARD_PHASE_DONE &&
+        ctx->source_group == WIZARD_NOMATCH) {
+        /* Every candidate group is power-less: terminal, no NVS write. */
+        return send_json(req, "200 OK",
+                         "{\"ok\":true,\"wizard\":{\"state\":\"done\",\"no_match\":true}}");
+    }
+    /* Auto-send the current group's POWER. */
+    (void)wizard_send_current();
+    char out[192];
+    snprintf(out, sizeof(out),
+             "{\"ok\":true,\"wizard\":{\"state\":\"try_power\",\"group_id\":%u,\"key\":\"%s\"},\"sent\":true}",
+             (unsigned)ctx->group_idx, web_key_name(wizard_current_key(ctx)));
+    return send_json(req, "200 OK", out);
+}
+
+static esp_err_t handle_api_pair_answer(httpd_req_t *req)
+{
+    char body[128];
+    int len = read_body(req, body, sizeof(body));
+    if (len <= 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
+    }
+    int reacted = 0;
+    if (!jget_bool(body, (size_t)len, "reacted", &reacted)) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"invalid body\"}");
+    }
+
+    wizard_ctx_t *ctx = &wizard_core_ctx;
+    if (ctx->phase == WIZARD_PHASE_IDLE) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"invalid state\"}");
+    }
+    if (ctx->phase == WIZARD_PHASE_DONE) {
+        /* Already terminal: safe no-op echoing the terminal state. */
+        int nm = (ctx->source_group == WIZARD_NOMATCH);
+        char out[96];
+        snprintf(out, sizeof(out),
+                 "{\"ok\":true,\"wizard\":{\"state\":\"done\",\"no_match\":%s}}",
+                 nm ? "true" : "false");
+        return send_json(req, "200 OK", out);
+    }
+
+    if (ctx->phase == WIZARD_PHASE_TRY_POWER) {
+        ctx = wizard_answer_power(ctx, reacted);
+    } else {   /* CALIBRATE (IDLE/DONE already handled above) */
+        ctx = wizard_answer_key(ctx, reacted);
+    }
+
+    if (ctx->phase == WIZARD_PHASE_DONE) {
+        if (ctx->source_group != WIZARD_NOMATCH) {
+            /* Completion with a locked group: write the calibration (the ONLY
+             * wizard write point — never called on cancel / reboot / no-match),
+             * then drop back to IDLE so status reports idle + calib present. */
+            pair_calib_store_nvs(ctx->keymap, ctx->source_group);
+            wizard_cancel();
+            return send_json(req, "200 OK",
+                             "{\"ok\":true,\"wizard\":{\"state\":\"done\"},\"done\":true}");
+        }
+        return send_json(req, "200 OK",
+                         "{\"ok\":true,\"wizard\":{\"state\":\"done\",\"no_match\":true}}");
+    }
+
+    /* Advanced and still active: auto-send the new current key. */
+    (void)wizard_send_current();
+    const char *wstate = (ctx->phase == WIZARD_PHASE_TRY_POWER) ? "try_power" : "calibrate";
+    char out[192];
+    snprintf(out, sizeof(out),
+             "{\"ok\":true,\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\"},\"sent\":true}",
+             wstate, (unsigned)ctx->group_idx, web_key_name(wizard_current_key(ctx)));
+    return send_json(req, "200 OK", out);
+}
+
+static esp_err_t handle_api_pair_cancel(httpd_req_t *req)
+{
+    char body[64];
+    int len = read_body(req, body, sizeof(body));
+    if (len <= 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
+    }
+    wizard_cancel();   /* never touches NVS; old pairing stays intact */
+    return send_json(req, "200 OK", "{\"ok\":true,\"state\":\"idle\"}");
+}
+
+static esp_err_t handle_api_pair_resend(httpd_req_t *req)
+{
+    char body[64];
+    int len = read_body(req, body, sizeof(body));
+    if (len <= 0) {
+        return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
+    }
+    /* Idempotent convenience: re-send the current wizard key (page-refresh
+     * recovery). With no active wizard (IDLE/DONE) the send is skipped but the
+     * endpoint still answers 200. */
+    (void)wizard_send_current();
+    return send_json(req, "200 OK", "{\"ok\":true,\"sent\":true}");
+}
+
 /* ---- Server start ---- */
 
 void web_server_start(void)
@@ -565,6 +777,10 @@ void web_server_start(void)
     REGISTER("/api/status", HTTP_GET, handle_api_status);
     REGISTER("/api/profiles", HTTP_GET, handle_api_profiles);
     REGISTER("/api/pair", HTTP_POST, handle_api_pair);
+    REGISTER("/api/pair/start", HTTP_POST, handle_api_pair_start);
+    REGISTER("/api/pair/answer", HTTP_POST, handle_api_pair_answer);
+    REGISTER("/api/pair/cancel", HTTP_POST, handle_api_pair_cancel);
+    REGISTER("/api/pair/resend", HTTP_POST, handle_api_pair_resend);
     REGISTER("/api/key", HTTP_POST, handle_api_key);
     REGISTER("/api/key/raw", HTTP_POST, handle_api_key_raw);
     REGISTER("/api/macro/start", HTTP_POST, handle_api_macro_start);

@@ -21,6 +21,10 @@ const ir_profile_t *ir_db_get_profile(uint8_t profile_id);
 /* Number of profiles in the built-in table. */
 uint8_t ir_db_get_profile_count(void);
 
+/* Pointer to the built-in profile table (array of `const ir_profile_t *`).
+ * Never NULL; its length is ir_db_get_profile_count(). */
+const ir_profile_t *const *ir_db_profile_table(void);
+
 /* Look up `key` in profile `p`. Returns 1 on success and fills `*addr`/`*cmd`;
  * returns 0 when the key is undefined (cmds[key]==0xFF) or arguments invalid. */
 uint8_t ir_db_find_key(const ir_profile_t *p, ir_key_t key,

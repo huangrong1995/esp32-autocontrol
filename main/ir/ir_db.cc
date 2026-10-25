@@ -129,6 +129,11 @@ uint8_t ir_db_get_profile_count(void)
     return (uint8_t)(sizeof(PROFILES) / sizeof(PROFILES[0]));
 }
 
+const ir_profile_t *const *ir_db_profile_table(void)
+{
+    return PROFILES;
+}
+
 uint8_t ir_db_find_key(const ir_profile_t *p, ir_key_t key,
                        uint16_t *addr, uint8_t *cmd)
 {

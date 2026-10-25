@@ -188,6 +188,55 @@ int main(void)
     ASSERT(pair_resolve_key(T_CALIB, IR_KEY_COUNT - 1, 0, IR_KEY_POWER, &addr, &cmd) == 1
            && cmd == 0x5A, "calib len!=23 → 视为 legacy");
 
+    /* ---- web_format_wizard 段(Step 4:各 state 文案、keys 0/1 渲染、NULL keys 省略 calib_group) ---- */
+    char wbuf[512];
+    int wn;
+
+    /* idle: state/group_id/key 文案 + NULL keys 省略 calib_group。 */
+    strcpy(wbuf, "{\"paired_profile\":255,\"playback\":{\"state\":\"idle\"}");
+    wn = web_format_wizard("idle", 0, "", NULL, 0, wbuf, sizeof(wbuf));
+    ASSERT(wn > 0, "idle wizard append must succeed");
+    ASSERT(strstr(wbuf, "\"wizard\":{\"state\":\"idle\",\"group_id\":0,\"key\":\"\"}") != NULL,
+           "idle wizard block text");
+    ASSERT(strstr(wbuf, "calib_group") == NULL, "NULL keys omits calib_group");
+    ASSERT(wbuf[wn] == '\0', "returned offset is the NUL position");
+
+    /* calibrate with a real key name, keys still NULL. */
+    strcpy(wbuf, "{\"paired_profile\":255,\"playback\":{\"state\":\"idle\"}");
+    wn = web_format_wizard("calibrate", 0, "VOL+", NULL, 0, wbuf, sizeof(wbuf));
+    ASSERT(wn > 0, "calibrate wizard append must succeed");
+    ASSERT(strstr(wbuf, "\"wizard\":{\"state\":\"calibrate\",\"group_id\":0,\"key\":\"VOL+\"}") != NULL,
+           "calibrate wizard block text");
+    ASSERT(strstr(wbuf, "calib_group") == NULL, "NULL keys omits calib_group again");
+
+    /* no_match state rendering. */
+    strcpy(wbuf, "{\"ok\":true");
+    wn = web_format_wizard("no_match", 3, "", NULL, 0, wbuf, sizeof(wbuf));
+    ASSERT(wn > 0, "no_match wizard append must succeed");
+    ASSERT(strstr(wbuf, "\"wizard\":{\"state\":\"no_match\",\"group_id\":3,\"key\":\"\"}") != NULL,
+           "no_match wizard block text");
+
+    /* keys: raw keymap bytes normalize to 0/1; POWER(idx 0) + VOL+(idx 1) set. */
+    static uint8_t WKEYS[IR_KEY_COUNT];
+    for (int i = 0; i < IR_KEY_COUNT; i++) WKEYS[i] = 0;
+    WKEYS[IR_KEY_POWER] = 0xA1; WKEYS[IR_KEY_VOL_UP] = 0xA2;   /* !=0 → rendered 1 */
+    strcpy(wbuf, "{\"paired_profile\":255,\"playback\":{\"state\":\"idle\"}");
+    wn = web_format_wizard("try_power", 2, "POWER", WKEYS, 3, wbuf, sizeof(wbuf));
+    ASSERT(wn > 0, "try_power + keys append must succeed");
+    ASSERT(strstr(wbuf, "\"wizard\":{\"state\":\"try_power\",\"group_id\":2,\"key\":\"POWER\"}") != NULL,
+           "try_power wizard block text");
+    ASSERT(strstr(wbuf, "\"calib_group\":3,\"keys\":[1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]") != NULL,
+           "keys array renders 1/1/0... and calib_group 3");
+
+    /* Capacity: too-small buffer → -1 and the existing prefix is untouched. */
+    char wtiny[16];
+    strcpy(wtiny, "{\"ok\":true}");
+    ASSERT(web_format_wizard("idle", 0, "", NULL, 0, wtiny, sizeof(wtiny)) == -1,
+           "too-small wizard append must return -1");
+    ASSERT(strcmp(wtiny, "{\"ok\":true}") == 0, "overflow must not disturb the prefix");
+    ASSERT(web_format_wizard("idle", 0, "", NULL, 0, NULL, 0) == -1,
+           "NULL/zero-cap wizard append must return -1");
+
     printf("WEB_LOGIC_SELFTEST_PASS\n");
     return 0;
 }
