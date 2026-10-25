@@ -21,11 +21,14 @@
  * high-confidence keys consistent across the LG/Vizio sources are filled and
  * the rest stay 0xFF (never fabricated / never mislabelled).
  *
- * profile[2] ("Hisense-C") stays an all-0xFF documented placeholder:
- * its nec_address records 0xBF00 — the REAL Hisense NEC-extended family
- * captured by WillEastbury/PICO_UNIVERSAL_REMOTE — but those frames need an
- * NEC-extended encoder (not the NEC1 encoder of this task), so every key
- * stays undefined here.
+ * profile[2] ("Hisense-C") carries the REAL Hisense NEC-extended family,
+ * captured live from an 85A6NTUK by WillEastbury/PICO_UNIVERSAL_REMOTE:
+ *   https://github.com/WillEastbury/PICO_UNIVERSAL_REMOTE/blob/main/server/hisense_codes.py
+ * NECx protocol, 38 kHz, extended address 0xBF00. On-wire byte order for
+ * every key is: 00, BF, <cmd>, <~cmd>. All 23 keys of the layout are filled
+ * with the captured <cmd> values. The 0xBA00 special keys in that source
+ * (vidaa/nowtv/freely/kid) are NOT part of this 23-key layout and are
+ * intentionally not filled.
  *
  * profile[3] reuses the official NEC1 addr-0x04 keymap as a generic NEC TV
  * layout (the only fully verified NEC1 TV table available).
@@ -79,21 +82,26 @@ static const ir_profile_t PROFILE_GENERIC_NEC_0X20 = {
     },
 };
 
-/* Hisense-C: "byte-swapped" family. The real Hisense NEC-extended variant
- * (captured by WillEastbury/PICO_UNIVERSAL_REMOTE, e.g. 85A6NTUK) uses the
- * 16-bit extended address 0xBF00 with, e.g., power=0x0D, mute=0x0E,
- * vol-=0x43, vol+=0x44, ch-=0x4B, ch+=0x4A, ok=0x15, up=0x16, down=0x17,
- * right=0x18, left=0x19, home=0x20, menu=0x14, back=0x48, exit=0x5C,
- * digits 0-9=0x00-0x09. Those frames require an NEC-extended encoder, which
- * this task's NEC1 encoder cannot emit, so all keys stay 0xFF here. */
+/* Hisense-C: the REAL Hisense NEC-extended (NECx) family, captured live from
+ * an 85A6NTUK by WillEastbury/PICO_UNIVERSAL_REMOTE
+ * (server/hisense_codes.py). Extended address 0xBF00, NECx 38 kHz.
+ * On-wire frame: 00 BF <cmd> <~cmd>.
+ * Positional: IR_KEY_POWER, VOL_UP, VOL_DOWN, CH_UP, CH_DOWN, MUTE,
+ *             MENU, EXIT, OK, UP, DOWN, LEFT, RIGHT,
+ *             0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+ * Comment shows <cmd>/<~cmd> of frame 00 BF xx yy. */
 static const ir_profile_t PROFILE_HISENSE_C = {
-    .name = "Hisense-C (NEC swapped)",
+    .name = "Hisense NECx 0xBF00",
     .nec_address = 0xBF00,
     .cmds = {
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        /* POWER=0x0D/0xF2  VOL+=0x44/0xBB  VOL-=0x43/0xBC  CH+=0x4A/0xB5  CH-=0x4B/0xB4 */
+        0x0D, 0x44, 0x43, 0x4A, 0x4B,
+        /* MUTE=0x0E/0xF1  MENU=0x14/0xEB  EXIT=0x5C/0xA3 */
+        0x0E, 0x14, 0x5C,
+        /* OK=0x15/0xEA  UP=0x16/0xE9  DOWN=0x17/0xE8  LEFT=0x19/0xE6  RIGHT=0x18/0xE7 */
+        0x15, 0x16, 0x17, 0x19, 0x18,
+        /* digits 0..9 = 0x00..0x09 (~cmd 0xFF..0xF6) */
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
     },
 };
 
