@@ -289,7 +289,15 @@ static esp_err_t handle_api_status(httpd_req_t *req)
         calib_group = pair_calib_group();
     }
 
-    int wn = web_format_wizard(wstate, wgroup, wkey, keyp, calib_group,
+    /* Group count + current group name from the wizard ctx. */
+    const char *group_name = "";
+    uint8_t group_count = ctx->group_count;
+    if (ctx->groups != NULL && ctx->group_idx < ctx->group_count) {
+        group_name = ctx->groups[ctx->group_idx]->name;
+    }
+
+    int wn = web_format_wizard(wstate, wgroup, wkey, group_count, group_name,
+                               keyp, calib_group,
                                buf, sizeof(buf));
     if (wn < 0 || (size_t)wn + 2 > sizeof(buf)) {
         buf[root_at - 1] = '}';   /* restore the base status verbatim */
@@ -678,8 +686,9 @@ static esp_err_t handle_api_pair_start(httpd_req_t *req)
     (void)wizard_send_current();
     char out[192];
     snprintf(out, sizeof(out),
-             "{\"ok\":true,\"wizard\":{\"state\":\"try_power\",\"group_id\":%u,\"key\":\"%s\"},\"sent\":true}",
-             (unsigned)ctx->group_idx, web_key_name(wizard_current_key(ctx)));
+             "{\"ok\":true,\"wizard\":{\"state\":\"try_power\",\"group_id\":%u,\"key\":\"%s\",\"group_count\":%u,\"group_name\":\"%s\"},\"sent\":true}",
+             (unsigned)ctx->group_idx, web_key_name(wizard_current_key(ctx)),
+             (unsigned)ctx->group_count, ctx->groups[ctx->group_idx]->name);
     return send_json(req, "200 OK", out);
 }
 
@@ -734,8 +743,9 @@ static esp_err_t handle_api_pair_answer(httpd_req_t *req)
     const char *wstate = (ctx->phase == WIZARD_PHASE_TRY_POWER) ? "try_power" : "calibrate";
     char out[192];
     snprintf(out, sizeof(out),
-             "{\"ok\":true,\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\"},\"sent\":true}",
-             wstate, (unsigned)ctx->group_idx, web_key_name(wizard_current_key(ctx)));
+             "{\"ok\":true,\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\",\"group_count\":%u,\"group_name\":\"%s\"},\"sent\":true}",
+             wstate, (unsigned)ctx->group_idx, web_key_name(wizard_current_key(ctx)),
+             (unsigned)ctx->group_count, ctx->groups[ctx->group_idx]->name);
     return send_json(req, "200 OK", out);
 }
 

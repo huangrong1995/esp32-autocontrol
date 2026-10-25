@@ -197,13 +197,15 @@ static inline int web_format_status(uint8_t paired_profile, const char *paired_n
  * Append the wizard + calibration block to an existing NUL-terminated JSON
  * prefix already stored in `buf` (the caller keeps the leading part of a
  * document; this function closes nothing). Appends:
- *   ,"wizard":{"state":"...","group_id":N,"key":"..."}
+ *   ,"wizard":{"state":"...","group_id":N,"key":"...","group_count":M,"group_name":"..."}
  * and, when `keys` != NULL, additionally appends:
  *   ,"calib_group":N,"keys":[0,1,...]
  * where each entry is rendered 1 when `keys[i] != 0` and 0 otherwise (the
  * caller passes raw keymap bytes; this helper normalizes to 0/1). `state` and
  * `key` are fixed wire values ("idle"/"try_power"/"calibrate"/"done"/"no_match"
  * and web_key_name() output — plain ASCII, no JSON escaping needed).
+ * `group_name` is likewise a plain-ASCII profile name (may be ""); non-ASCII
+ * names would require JSON escaping — future work, not this round.
  *
  * Returns the new offset (index of the NUL terminator), or -1 when the buffer
  * is too small. Capacity is checked UP FRONT — on overflow nothing is written,
@@ -212,6 +214,7 @@ static inline int web_format_status(uint8_t paired_profile, const char *paired_n
  * omits the `calib_group` field entirely.
  */
 static inline int web_format_wizard(const char *state, uint8_t group, const char *key,
+                                    uint8_t group_count, const char *group_name,
                                     const uint8_t *keys,
                                     uint8_t calib_group,
                                     char *buf, size_t cap)
@@ -225,6 +228,9 @@ static inline int web_format_wizard(const char *state, uint8_t group, const char
     if (key == NULL) {
         key = "";
     }
+    if (group_name == NULL) {
+        group_name = "";
+    }
     size_t off = strlen(buf);
     if (off >= cap) {
         return -1;
@@ -233,8 +239,8 @@ static inline int web_format_wizard(const char *state, uint8_t group, const char
 
     /* Up-front sizing: base wizard block + optional calib block. */
     int n = snprintf(NULL, 0,
-                     ",\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\"}",
-                     state, (unsigned)group, key);
+                     ",\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\",\"group_count\":%u,\"group_name\":\"%s\"}",
+                     state, (unsigned)group, key, (unsigned)group_count, group_name);
     if (n < 0) {
         return -1;
     }
@@ -263,8 +269,8 @@ static inline int web_format_wizard(const char *state, uint8_t group, const char
         off += nn; \
     } while (0)
 
-    APPEND(",\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\"}",
-           state, (unsigned)group, key);
+    APPEND(",\"wizard\":{\"state\":\"%s\",\"group_id\":%u,\"key\":\"%s\",\"group_count\":%u,\"group_name\":\"%s\"}",
+           state, (unsigned)group, key, (unsigned)group_count, group_name);
     if (keys != NULL) {
         APPEND(",\"calib_group\":%u,\"keys\":[", (unsigned)calib_group);
         for (int i = 0; i < IR_KEY_COUNT; i++) {

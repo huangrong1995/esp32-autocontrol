@@ -264,7 +264,6 @@ function renderPaired(d) {
 
 /* ---- 配对向导(方案 A) ---- */
 
-var WIZ_GROUP_COUNT = 4;   /* 内置信号组数量,与固件 ir_db 一致 */
 var KEY_ZH = {
   'POWER': '电源', 'VOL+': '音量+', 'VOL-': '音量-',
   'CH+': '频道+', 'CH-': '频道-', 'MUTE': '静音',
@@ -314,15 +313,17 @@ function renderWizard(w, sent) {
   /* try_power / calibrate:大字键名 + 副文案 + 双大按钮 + 组进度。 */
   var zh = KEY_ZH[w.key] || w.key || '';
   var group = w.group_id || 0;
+  var total = w.group_count || 1;   /* 服务端配对期间必带;fallback 1 防除零 */
   keyEl.textContent = zh;
   if (w.state === 'try_power') {
     hintEl.textContent = '电视有反应吗?';
-    barEl.style.width = Math.round(group * 100 / WIZ_GROUP_COUNT) + '%';
+    barEl.style.width = Math.round(group * 100 / total) + '%';
   } else {
     hintEl.textContent = zh + '是否生效?';
-    barEl.style.width = Math.round((group + 1) * 100 / WIZ_GROUP_COUNT) + '%';
+    barEl.style.width = Math.round((group + 1) * 100 / total) + '%';
   }
-  groupEl.textContent = '信号组 ' + (group + 1) + '/' + WIZ_GROUP_COUNT;
+  groupEl.textContent = '信号组 ' + (group + 1) + '/' + total +
+                        (w.group_name ? ' · ' + w.group_name : '');
   cancelEl.style.display = 'inline-block';
   resendEl.style.display = 'inline-block';
   actionsEl.innerHTML =
