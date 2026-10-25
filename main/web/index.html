@@ -30,37 +30,56 @@
   }
   .paired b { color: var(--ok); }
   .paired .none { color: var(--muted); }
-  section {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    padding: 12px; margin-bottom: 12px;
-  }
-  section h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent); }
-  .profile {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    padding: 8px 0; border-top: 1px solid var(--border);
-  }
-  .profile:first-of-type { border-top: none; }
-  .profile .name { flex: 1 1 140px; font-size: 14px; }
-  .profile .note { font-size: 12px; color: var(--muted); }
   button {
     font: inherit; color: #fff; background: var(--accent);
     border: none; border-radius: 8px; padding: 8px 12px; cursor: pointer;
   }
   button:active { filter: brightness(0.85); }
-  button.test { background: #f59e0b; }
-  button.pair { background: var(--ok); }
+  button.del { background: var(--danger); }
+  button.cancel { background: #6b7280; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ---- 三视图互斥显隐 ---- */
+  .view { display: none; background: none; border: none; padding: 0; margin: 0; }
+  .view.active { display: block; }
+
+  /* ---- 未配对视图:说明 + 大按钮「开始配对」 ---- */
+  .unpaired-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 32px 20px; margin-top: 4px; text-align: center;
+  }
+  .unpaired-title { font-size: 20px; margin-bottom: 10px; }
+  .unpaired-desc { color: var(--muted); font-size: 14px; line-height: 1.7; margin-bottom: 24px; }
+  button.wiz-start {
+    width: 100%; padding: 14px 8px; font-size: 18px;
+    background: var(--ok); border-radius: 12px;
+  }
+
+  /* ---- 遥控器视图(已配对) ---- */
+  .pair-actions { display: flex; justify-content: flex-end; margin: -4px 0 12px; }
+  .pair-actions button { padding: 6px 12px; font-size: 13px; }
+  .grid-panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; margin-bottom: 12px;
+  }
   .grid {
     display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 8px; margin-top: 4px;
+    gap: 8px;
   }
   .grid button {
     padding: 16px 0; font-size: 15px; background: #232a31;
     border: 1px solid var(--border); border-radius: 10px;
   }
   .grid button.power { grid-column: span 3; background: var(--danger); font-size: 17px; }
-  #statusline { color: var(--muted); font-size: 13px; min-height: 18px; margin: 8px 2px; }
-  #statusline.error { color: var(--danger); }
-  #statusline.ok { color: var(--ok); }
+  .grid button.undef { opacity: .35; }   /* 键码为 0xFF:灰掉、(未匹配)、点击不发送 */
+  #keyGrid.playing button { opacity: .45; pointer-events: none; }
+
+  /* ---- 宏区(保留原逻辑与样式,渲染在遥控器视图内) ---- */
+  #macroArea {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; margin-top: 12px;
+  }
+  #macroArea h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent); }
   .macro {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 8px 0; border-top: 1px solid var(--border);
@@ -69,38 +88,89 @@
   .macro .macro-name { flex: 1 1 120px; font-size: 14px; }
   .macro .macro-note { font-size: 12px; color: var(--muted); }
   .macro-empty { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
-  button.del { background: var(--danger); }
-  button.cancel { background: #6b7280; }
-  .playing { color: var(--ok); font-size: 13px; margin-left: 8px; }
   .rec-hint { color: var(--danger); font-size: 13px; margin: 0 0 8px; }
-  .pair-hint { color: var(--muted); font-size: 13px; margin: 0 0 8px; text-align: center; }
-  #keyGrid.playing button { opacity: .45; pointer-events: none; }
-  #profileList.playing button { opacity: .45; pointer-events: none; }
-  button:disabled { opacity: .45; cursor: not-allowed; }
+  .playing { color: var(--ok); font-size: 13px; margin-left: 8px; }
   #macroRecControl { margin-top: 8px; }
+
+  #statusline { color: var(--muted); font-size: 13px; min-height: 18px; margin: 8px 2px; }
+  #statusline.error { color: var(--danger); }
+  #statusline.ok { color: var(--ok); }
+
+  /* ---- 配对向导视图(方案 A 全屏) ---- */
+  #viewWizard.active {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 20;
+    width: 100%; max-width: 480px; margin: 0 auto;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    padding: 20px 16px 16px;
+  }
+  #viewWizard.active {
+    padding: calc(16px + env(safe-area-inset-top, 0px)) 16px 16px;
+  }
+  .wiz-top { display: flex; align-items: center; gap: 12px; }
+  .wiz-progress { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .wiz-progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .35s; }
+  .wiz-group { font-size: 13px; color: var(--muted); white-space: nowrap; min-width: 72px; text-align: center; }
+  .wiz-cancel { padding: 6px 12px; font-size: 13px; }
+  .wiz-card {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px; text-align: center;
+  }
+  .wiz-sent { color: var(--ok); font-size: 14px; min-height: 20px; opacity: 0; transition: opacity .3s; }
+  .wiz-sent.show { opacity: 1; }
+  .wiz-key { font-size: 34px; font-weight: 700; min-height: 44px; }
+  .wiz-hint { color: var(--muted); font-size: 15px; min-height: 20px; }
+  .wiz-actions { display: flex; gap: 12px; width: 100%; margin-top: 18px; }
+  .wiz-actions button { flex: 1; padding: 16px 8px; font-size: 18px; border-radius: 12px; }
+  .wiz-actions .wiz-yes { background: var(--ok); }
+  .wiz-actions .wiz-no { background: #6b7280; }
+  .wiz-actions .wiz-back { background: var(--accent); }
+  .wiz-resend {
+    margin-top: 4px; padding: 4px 8px; font-size: 13px;
+    background: none; color: var(--muted); text-decoration: underline;
+  }
 </style>
 </head>
 <body>
   <h1>ESP32 红外遥控</h1>
   <p class="sub">手机连热点后访问 192.168.4.1 · 先配对,再点键遥控</p>
-  <div class="paired">当前配对:<span id="pairedName" class="none">未配对</span></div>
   <div id="statusline"></div>
 
-  <section>
-    <h2>① 配对 — 每档先试「电源」,电视有反应就「就用这档」</h2>
-    <div id="profileList"><div class="profile"><span class="name">加载中…</span></div></div>
+  <!-- 视图 1:未配对 —— 说明 + 开始配对入口 -->
+  <section id="viewUnpaired" class="view">
+    <div class="unpaired-card">
+      <div class="unpaired-title">遥控器还未配对</div>
+      <div class="unpaired-desc">把遥控器对准电视,点击「开始配对」。每步设备会自动发送一个按键,你只需要回答「有反应」或「没反应」。</div>
+      <button class="wiz-start" onclick="pairStart()">开始配对</button>
+    </div>
   </section>
 
-  <section>
-    <h2>② 遥控器</h2>
-    <div id="pairHint" class="pair-hint">连接设备中…</div>
-    <div class="grid" id="keyGrid"></div>
+  <!-- 视图 2:配对向导(全屏)。含 no_match 终点卡 -->
+  <section id="viewWizard" class="view">
+    <div class="wiz-top">
+      <div class="wiz-progress"><div class="wiz-progress-fill" id="wizProgress"></div></div>
+      <span class="wiz-group" id="wizGroup"></span>
+      <button class="cancel wiz-cancel" id="wizCancel" onclick="pairCancel()">取消</button>
+    </div>
+    <div class="wiz-card">
+      <div class="wiz-sent" id="wizSent"></div>
+      <div class="wiz-key" id="wizKey"></div>
+      <div class="wiz-hint" id="wizHint"></div>
+      <div class="wiz-actions" id="wizActions"></div>
+      <button class="wiz-resend" id="wizResend" onclick="pairResend()">没看到信号?重新发送</button>
+    </div>
   </section>
 
-  <section>
-    <h2>③ 宏</h2>
-    <div id="macroList"></div>
-    <div id="macroRecControl"></div>
+  <!-- 视图 3:遥控器(已配对)+ 宏区 -->
+  <section id="viewRemote" class="view">
+    <div class="paired" id="remoteBadge"></div>
+    <div class="pair-actions"><button class="cancel" onclick="pairStart()">重新配对</button></div>
+    <div class="grid grid-panel" id="keyGrid"></div>
+    <section id="macroArea">
+      <h2>宏</h2>
+      <div id="macroList"></div>
+      <div id="macroRecControl"></div>
+    </section>
   </section>
 
 <script>
@@ -126,7 +196,8 @@ function api(url, opts) {
 
 /* 把常见服务器错误(英文 JSON 字段)映射成人性化中文;未知的保留原文。 */
 var SERVER_ERRORS = {
-  'not paired': '未配对 — 请先在①配对区「电源测试」并点「就用这档」',
+  'not paired': '未配对 — 请先完成配对向导',
+  'invalid state': '配对向导状态异常,请从头开始',
   'macro not found': '宏不存在（可能已被删除）',
   'invalid name': '宏名不合法',
   'missing name': '缺少宏名',
@@ -153,13 +224,220 @@ function friendlyMsg(raw) {
   return SERVER_ERRORS[raw] || raw;
 }
 
-var lastStatus = null;      /* latest /api/status payload (recording routing) */
+var lastStatus = null;      /* latest /api/status payload (single source for keys/calib_group/wizard) */
 var playTimer = null;       /* 1s playback-progress poller */
 
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
                   .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+/* ---- 视图切换 ---- */
+
+function showView(id) {
+  ['viewUnpaired', 'viewWizard', 'viewRemote'].forEach(function (v) {
+    document.getElementById(v).classList.toggle('active', v === id);
+  });
+}
+
+/* 互斥判据:已配对(旧式档 或 校准档) -> 遥控器;未配对且向导非 idle -> 向导;否则 -> 未配对入口。
+ * 校准档配对后 pair_profile 已被 erase(=255),只能靠 calib_group 识别已配对。 */
+function pickView(d) {
+  var paired = (d.paired_profile !== 255) || (d.calib_group !== undefined);
+  if (paired) return 'viewRemote';
+  var ws = (d.wizard || {}).state;
+  if (ws && ws !== 'idle') return 'viewWizard';
+  return 'viewUnpaired';
+}
+
+function renderPaired(d) {
+  var el = document.getElementById('remoteBadge');
+  var paired = (d.paired_profile !== 255) || (d.calib_group !== undefined);
+  if (paired && d.calib_group !== undefined) {
+    el.innerHTML = '已配对 <b>· 来源信号组 #' + (d.calib_group + 1) + '</b>';
+  } else if (paired) {
+    el.innerHTML = '已配对 <b>: ' + esc(d.paired_name || ('档 #' + d.paired_profile)) + '</b>';
+  } else {
+    el.innerHTML = '当前配对: <span class="none">未配对</span>';
+  }
+}
+
+/* ---- 配对向导(方案 A) ---- */
+
+var WIZ_GROUP_COUNT = 4;   /* 内置信号组数量,与固件 ir_db 一致 */
+var KEY_ZH = {
+  'POWER': '电源', 'VOL+': '音量+', 'VOL-': '音量-',
+  'CH+': '频道+', 'CH-': '频道-', 'MUTE': '静音',
+  'MENU': '菜单', 'EXIT': '退出', 'OK': '确定',
+  'UP': '上', 'DOWN': '下', 'LEFT': '左', 'RIGHT': '右'
+};
+var wizSentTimer = null;
+
+function flashSent(w, sent) {
+  var flag = !!(sent || (w && w.sent));
+  var el = document.getElementById('wizSent');
+  if (!flag) { el.classList.remove('show'); return; }
+  el.textContent = '已发送信号 · 请看电视';
+  el.classList.add('show');
+  if (wizSentTimer) clearTimeout(wizSentTimer);
+  wizSentTimer = setTimeout(function () { el.classList.remove('show'); }, 1600);
+}
+
+function renderWizard(w, sent) {
+  showView('viewWizard');
+  w = w || { state: 'idle' };
+  var keyEl = document.getElementById('wizKey');
+  var hintEl = document.getElementById('wizHint');
+  var groupEl = document.getElementById('wizGroup');
+  var actionsEl = document.getElementById('wizActions');
+  var barEl = document.getElementById('wizProgress');
+  var cancelEl = document.getElementById('wizCancel');
+  var resendEl = document.getElementById('wizResend');
+  flashSent(w, sent);
+
+  if (w.state === 'done' || w.state === 'no_match') {
+    /* 终点卡:no_match 停在向导(「返回」-> pairCancel -> idle -> 未配对入口)。 */
+    var noMatch = !!w.no_match || w.state === 'no_match';
+    keyEl.textContent = noMatch ? '没有匹配的信号组' : '配对完成';
+    hintEl.textContent = noMatch ? '所有信号组都没有反应,请确认遥控器正对电视后重新开始。'
+                                 : '校准档已生成,开始使用遥控器吧。';
+    groupEl.textContent = '';
+    barEl.style.width = '100%';
+    cancelEl.style.display = 'none';
+    resendEl.style.display = 'none';
+    actionsEl.innerHTML = noMatch
+      ? '<button class="wiz-back" onclick="pairCancel()">返回</button>'
+      : '<button class="wiz-back" onclick="refreshStatus()">完成</button>';
+    return;
+  }
+
+  /* try_power / calibrate:大字键名 + 副文案 + 双大按钮 + 组进度。 */
+  var zh = KEY_ZH[w.key] || w.key || '';
+  var group = w.group_id || 0;
+  keyEl.textContent = zh;
+  if (w.state === 'try_power') {
+    hintEl.textContent = '电视有反应吗?';
+    barEl.style.width = Math.round(group * 100 / WIZ_GROUP_COUNT) + '%';
+  } else {
+    hintEl.textContent = zh + '是否生效?';
+    barEl.style.width = Math.round((group + 1) * 100 / WIZ_GROUP_COUNT) + '%';
+  }
+  groupEl.textContent = '信号组 ' + (group + 1) + '/' + WIZ_GROUP_COUNT;
+  cancelEl.style.display = 'inline-block';
+  resendEl.style.display = 'inline-block';
+  actionsEl.innerHTML =
+    '<button class="wiz-yes" onclick="pairAnswer(true)">有反应</button>' +
+    '<button class="wiz-no" onclick="pairAnswer(false)">没反应</button>';
+}
+
+function pairStart() {
+  var st = (lastStatus && lastStatus.playback) ? lastStatus.playback.state : 'idle';
+  if (st !== 'idle') {
+    setStatus('录制或回放中不可配对 — 请先停止', 'error');
+    return;
+  }
+  api('/api/pair/start', { method: 'POST', body: '{}' })
+    .then(function (d) { if (d.wizard) renderWizard(d.wizard, d.sent); })
+    .catch(function (e) { setStatus(e.message, 'error'); });
+}
+
+/* 每步设备自动发送当前键,前端不额外发;#wizSent 由 d.sent 决定闪现。 */
+function pairAnswer(r) {
+  api('/api/pair/answer', { method: 'POST', body: JSON.stringify({ reacted: r }) })
+    .then(function (d) { d.done ? refreshStatus() : renderWizard(d.wizard, d.sent); })
+    .catch(function (e) { setStatus(e.message, 'error'); });
+}
+
+function pairCancel() {
+  api('/api/pair/cancel', { method: 'POST', body: '{}' })
+    .then(refreshStatus)
+    .catch(function (e) { setStatus(e.message, 'error'); });
+}
+
+/* 刷新时"没看到信号"补救:重发当前键(无活动向导时后端安全忽略)。 */
+function pairResend() {
+  api('/api/pair/resend', { method: 'POST', body: '{}' })
+    .then(function (d) {
+      var el = document.getElementById('wizSent');
+      if (d.sent) {
+        el.textContent = '已重发信号 · 请看电视';
+        el.classList.add('show');
+        if (wizSentTimer) clearTimeout(wizSentTimer);
+        wizSentTimer = setTimeout(function () { el.classList.remove('show'); }, 1600);
+      } else {
+        el.classList.remove('show');
+      }
+    })
+    .catch(function (e) { setStatus(e.message, 'error'); });
+}
+
+/* ---- 遥控器 ---- */
+
+/* 23 键布局(POWER 跨整行)。按键名称必须与固件 web_parse_key_name 完全一致。 */
+var KEY_LAYOUT = [
+  { name: 'POWER', cls: 'power' },
+  { name: 'MENU' }, { name: 'EXIT' }, { name: 'MUTE' },
+  { name: 'CH+' }, { name: 'OK' }, { name: 'CH-' },
+  { name: 'VOL-' }, { name: 'UP' }, { name: 'VOL+' },
+  { name: 'LEFT' }, { name: 'DOWN' }, { name: 'RIGHT' },
+  { name: '1' }, { name: '2' }, { name: '3' },
+  { name: '4' }, { name: '5' }, { name: '6' },
+  { name: '7' }, { name: '8' }, { name: '9' },
+  { name: '0' }
+];
+
+/* 固件键序:KEY_ORDER[i] 即 web 层 IR_KEY_t i,与 /api/status 的 keys[] 一一对应。 */
+var KEY_ORDER = [
+  'POWER', 'VOL+', 'VOL-', 'CH+', 'CH-', 'MUTE', 'MENU', 'EXIT', 'OK',
+  'UP', 'DOWN', 'LEFT', 'RIGHT',
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'
+];
+function keyIndex(name) {
+  for (var i = 0; i < KEY_ORDER.length; i++) {
+    if (KEY_ORDER[i] === name) return i;
+  }
+  return -1;
+}
+
+function renderGrid() {
+  var keys = (lastStatus && lastStatus.keys) ? lastStatus.keys : null;   /* 缺省(legacy 配对)视为全 1 */
+  var html = '';
+  KEY_LAYOUT.forEach(function (k) {
+    var idx = keyIndex(k.name);
+    var undef = !!(keys && idx >= 0 && keys[idx] === 0);
+    html += '<button class="' + (k.cls || '') + (undef ? ' undef' : '') + '"'
+          + (undef ? ' disabled' : '')
+          + ' onclick="sendKey(\'' + k.name + '\')">'
+          + (undef ? k.name + '(未匹配)' : k.name) + '</button>';
+  });
+  document.getElementById('keyGrid').innerHTML = html;
+}
+
+function sendKey(name) {
+  var st = (lastStatus && lastStatus.playback) ? lastStatus.playback.state : 'idle';
+  if (st === 'playing') {
+    setStatus('回放中不可按键 — 请先「停止回放」', 'error');
+    return;
+  }
+  /* 未定义键(校准档中为 0xFF):灰键短路,不发送。 */
+  var idx = keyIndex(name);
+  if (idx >= 0 && lastStatus && lastStatus.keys && lastStatus.keys[idx] === 0) {
+    setStatus('该键未匹配,暂不可用', 'error');
+    return;
+  }
+  /* 录制中:按键同时录成宏步骤并照常发送,由 /api/macro/step 一次完成。 */
+  if (st === 'recording') {
+    api('/api/macro/step', { method: 'POST', body: JSON.stringify({ key: name }) })
+      .then(function () { setStatus('已录制并发送 ' + name, 'ok'); })
+      .catch(function (e) { setStatus('录制按键失败: ' + e.message, 'error'); });
+    return;
+  }
+  api('/api/key', { method: 'POST', body: JSON.stringify({ key: name }) })
+    .then(function () { setStatus('已发送 ' + name, 'ok'); })
+    .catch(function (e) { setStatus('发送失败: ' + e.message, 'error'); });
+}
+
+/* ---- 宏:录制 / 保存 / 回放 / 删除(保留原逻辑) ---- */
 
 function renderMacros(d) {
   var list = document.getElementById('macroList');
@@ -209,79 +487,23 @@ function syncPlaybackPolling(d) {
 function refreshStatus() {
   api('/api/status').then(function (d) {
     lastStatus = d;
-    var el = document.getElementById('pairedName');
-    var hint = document.getElementById('pairHint');
-    if (d.paired_profile === 255) {
-      el.textContent = '未配对';
-      el.className = 'none';
-      hint.textContent = '未配对 — 请先在①配对区「电源测试」选档并点「就用这档」';
-    } else {
-      el.textContent = d.paired_name || ('档 #' + d.paired_profile);
-      el.className = '';
-      hint.textContent = '';
-    }
-    /* 回放中禁用按键网格与配对区按钮(急停不应通过点按键触发);录制中保持可用。 */
+    var view = pickView(d);
+    showView(view);
+    renderPaired(d);
+    renderGrid();
+    /* 回放中禁用按键网格与配对按钮(急停不应通过点按键触发);录制中保持可用。 */
     var playing = (d.playback || {}).state === 'playing';
     document.getElementById('keyGrid').classList.toggle('playing', playing);
-    document.getElementById('profileList').classList.toggle('playing', playing);
     renderMacros(d);
     syncPlaybackPolling(d);
+    if (view === 'viewWizard') {
+      /* 页面刷新(或 no_match 后停留)时从 status.wizard 恢复向导渲染。 */
+      renderWizard(d.wizard || { state: 'idle' }, undefined);
+    }
   }).catch(function (e) {
     setStatus('读取状态失败: ' + e.message, 'error');
-    document.getElementById('pairHint').textContent = '无法连接设备,请检查热点连接';
   });
 }
-
-function refreshProfiles() {
-  api('/api/profiles').then(function (list) {
-    var html = '';
-    list.forEach(function (p) {
-      html += '<div class="profile">' +
-        '<span class="name">' + p.name + '</span>' +
-        '<span class="note">' + (p.keys_known ? '全键可用' : '部分键缺失') + '</span>' +
-        '<button class="test" onclick="testPower(' + p.id + ')">电源测试</button>' +
-        '<button class="pair" onclick="pair(' + p.id + ')">就用这档</button>' +
-        '</div>';
-    });
-    document.getElementById('profileList').innerHTML = html;
-  }).catch(function (e) { setStatus('读取信号库失败: ' + e.message, 'error'); });
-}
-
-function testPower(id) {
-  setStatus('正在发送 档#' + id + ' 的电源键…');
-  api('/api/key', { method: 'POST', body: JSON.stringify({ key: 'POWER', profile_id: id }) })
-    .then(function () { setStatus('已发送 档#' + id + ' 的电源键,电视有反应吗?', 'ok'); })
-    .catch(function (e) { setStatus('发送失败: ' + e.message, 'error'); });
-}
-
-function pair(id) {
-  api('/api/pair', { method: 'POST', body: JSON.stringify({ profile_id: id }) })
-    .then(function (d) {
-      setStatus('已配对: 档#' + d.paired_profile, 'ok');
-      refreshStatus();
-    })
-    .catch(function (e) { setStatus('配对失败: ' + e.message, 'error'); });
-}
-
-function sendKey(name) {
-  var st = (lastStatus && lastStatus.playback) ? lastStatus.playback.state : 'idle';
-  if (st === 'playing') {
-    setStatus('回放中不可按键 — 请先「停止回放」', 'error');
-    return;
-  }
-  /* 录制中:按键同时录成宏步骤并照常发送,由 /api/macro/step 一次完成。 */
-  if (st === 'recording') {
-    api('/api/macro/step', { method: 'POST', body: JSON.stringify({ key: name }) })
-      .then(function () { setStatus('已录制并发送 ' + name, 'ok'); })
-      .catch(function (e) { setStatus('录制按键失败: ' + e.message, 'error'); });
-    return;
-  }
-  api('/api/key', { method: 'POST', body: JSON.stringify({ key: name }) })
-    .then(function () { setStatus('已发送 ' + name, 'ok'); })
-    .catch(function (e) { setStatus('发送失败: ' + e.message, 'error'); });
-}
-
-/* ---- 宏:录制 / 保存 / 回放 / 删除 ---- */
 
 function findMacro(id) {
   if (!lastStatus || !lastStatus.macros) return null;
@@ -340,29 +562,7 @@ function deleteMacro(id) {
     .catch(function (e) { setStatus('删除失败: ' + e.message, 'error'); refreshStatus(); });
 }
 
-/* 23 键布局(POWER 跨整行)。按键名称必须与固件 web_parse_key_name 完全一致。 */
-var KEY_LAYOUT = [
-  { name: 'POWER', cls: 'power' },
-  { name: 'MENU' }, { name: 'EXIT' }, { name: 'MUTE' },
-  { name: 'CH+' }, { name: 'OK' }, { name: 'CH-' },
-  { name: 'VOL-' }, { name: 'UP' }, { name: 'VOL+' },
-  { name: 'LEFT' }, { name: 'DOWN' }, { name: 'RIGHT' },
-  { name: '1' }, { name: '2' }, { name: '3' },
-  { name: '4' }, { name: '5' }, { name: '6' },
-  { name: '7' }, { name: '8' }, { name: '9' },
-  { name: '0' }
-];
-
-function renderGrid() {
-  var html = '';
-  KEY_LAYOUT.forEach(function (k) {
-    html += '<button class="' + (k.cls || '') + '" onclick="sendKey(\'' + k.name + '\')">' + k.name + '</button>';
-  });
-  document.getElementById('keyGrid').innerHTML = html;
-}
-
 renderGrid();
-refreshProfiles();
 refreshStatus();
 </script>
 </body>
