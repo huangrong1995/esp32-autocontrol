@@ -759,6 +759,7 @@ static esp_err_t handle_api_pair_resend(httpd_req_t *req)
 void web_server_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.max_uri_handlers = 16; /* 16 routes registered below — keep in sync */
     cfg.stack_size = 8192; /* headroom for serving the embedded page + JSON */
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &cfg) != ESP_OK) {
