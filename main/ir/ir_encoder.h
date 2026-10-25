@@ -46,6 +46,10 @@ static inline ir_symbol_t ir_symbol_make(uint32_t mark_us, uint32_t idle_us)
  *   leader: 9 ms mark / 4.5 ms space
  *   bit "0": 562us mark / 562us space    bit "1": 562us mark / 1690us space
  *   trailing: 562us mark + idle space (stop bit)
+ * When `address > 0xFF`, encodes as NEC-extended (NECx): the frame is
+ *   addr_low(8)  addr_high(8)  command(8)  ~command(8)
+ *   i.e. byte1 is the address HIGH byte, not the bitwise complement
+ *   (PICO-universal remote convention).
  * Returns the number of symbols written (0 if `cap` too small / NULL).
  * Pure function — no hardware access, host-testable. */
 static inline size_t ir_encode_nec(uint16_t address, uint8_t command,
@@ -59,11 +63,21 @@ static inline size_t ir_encode_nec(uint16_t address, uint8_t command,
     size_t n = 0;
     out[n++] = ir_symbol_make(IR_NEC_LEADER_MARK_US, IR_NEC_LEADER_SPACE_US);
 
-    /* 32-bit stream read LSB-first: addr(0..7), ~addr(8..15), cmd(16..23), ~cmd(24..31). */
-    uint32_t frame = (uint32_t)(address & 0xFFu)
-                   | ((uint32_t)(~address & 0xFFu) << 8)
-                   | ((uint32_t)command << 16)
-                   | ((uint32_t)(~command & 0xFFu) << 24);
+    /* 32-bit stream read LSB-first.  NEC1: addr(0..7) ~addr(8..15) cmd(16..23) ~cmd(24..31).
+     * NECx (address > 0xFF): addr_low(0..7) addr_high(8..15) cmd(16..23) ~cmd(24..31) —
+     * byte1 is the address HIGH byte, not the bitwise complement (PICO-universal convention). */
+    uint32_t frame;
+    if (address > 0xFFu) {
+        frame = (uint32_t)(address & 0xFFu)
+              | ((uint32_t)((address >> 8) & 0xFFu) << 8)
+              | ((uint32_t)command << 16)
+              | ((uint32_t)(~command & 0xFFu) << 24);
+    } else {
+        frame = (uint32_t)(address & 0xFFu)
+              | ((uint32_t)(~address & 0xFFu) << 8)
+              | ((uint32_t)command << 16)
+              | ((uint32_t)(~command & 0xFFu) << 24);
+    }
 
     for (int i = 0; i < 32; i++) {
         uint32_t bit = (frame >> i) & 1u;

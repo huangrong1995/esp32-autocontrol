@@ -54,6 +54,27 @@ int main(void)
         { 562, IR_NEC_TRAIL_IDLE_US },
     };
 
+    /* Known-true NECx frame for ir_encode_nec(0xBF00, 0x0D).
+     * On-wire bytes (LSB-first): 0x00 0xBF 0x0D 0xF2 (no complement on addr). */
+    static const uint32_t EXPECTED2[34][2] = {
+        /* leader */
+        { 9000, 4500 },
+        /* addr_low 0x00 = b00000000, LSB-first: 0,0,0,0,0,0,0,0 */
+        { 562, 562 }, { 562, 562 }, { 562, 562 }, { 562, 562 },
+        { 562, 562 }, { 562, 562 }, { 562, 562 }, { 562, 562 },
+        /* addr_high 0xBF = b10111111, LSB-first: 1,1,1,1,1,1,0,1 */
+        { 562, 1690 }, { 562, 1690 }, { 562, 1690 }, { 562, 1690 },
+        { 562, 1690 }, { 562, 1690 }, { 562, 562 }, { 562, 1690 },
+        /* cmd 0x0D = b00001101, LSB-first: 1,0,1,1,0,0,0,0 */
+        { 562, 1690 }, { 562, 562 }, { 562, 1690 }, { 562, 1690 },
+        { 562, 562 }, { 562, 562 }, { 562, 562 }, { 562, 562 },
+        /* ~cmd 0xF2 = b11110010, LSB-first: 0,1,0,0,1,1,1,1 */
+        { 562, 562 }, { 562, 1690 }, { 562, 562 }, { 562, 562 },
+        { 562, 1690 }, { 562, 1690 }, { 562, 1690 }, { 562, 1690 },
+        /* ending: trailing 562us mark + idle */
+        { 562, IR_NEC_TRAIL_IDLE_US },
+    };
+
     ir_symbol_t syms[40];
     size_t n = ir_encode_nec(0x04, 0x1F, syms, sizeof(syms) / sizeof(syms[0]));
 
@@ -82,6 +103,18 @@ int main(void)
     ASSERT(((frame >> 8) & 0xFFu) == 0xFBu, "byte1 (~address) must be ~0x04 & 0xFF");
     ASSERT(((frame >> 16) & 0xFFu) == 0x1Fu, "byte2 (command) must be 0x1F");
     ASSERT(((frame >> 24) & 0xFFu) == 0xE0u, "byte3 (~command) must be ~0x1F & 0xFF");
+
+    /* Test 3: NECx frame — 0xBF00 0x0D → 00 BF 0D F2, 34 symbols. */
+    size_t n2 = ir_encode_nec(0xBF00, 0x0D, syms, sizeof(syms) / sizeof(syms[0]));
+    ASSERT(n2 == 34, "NECx: expected exactly 34 symbols");
+    for (size_t i = 0; i < 34; i++) {
+        ir_symbol_t want = ir_symbol_make(EXPECTED2[i][0], EXPECTED2[i][1]);
+        if (syms[i] != want) {
+            printf("IR_SELFTEST_FAIL: NECx symbol %u = 0x%08X, want 0x%08X\n",
+                   (unsigned)i, (unsigned)syms[i], (unsigned)want);
+            return 1;
+        }
+    }
 
     printf("IR_SELFTEST_PASS\n");
     return 0;
