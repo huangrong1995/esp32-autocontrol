@@ -61,13 +61,13 @@ int pair_calib_read_nvs(uint8_t *out)
 }
 
 /*
- * THE ONLY entry point in the whole project that writes pairing state.
- * NVS is written EXCLUSIVELY when the wizard completes; cancel / reboot /
- * no-match must never write. Storing a calibration atomically writes the
- * 23-byte blob (pair_calib) + its source group (pair_group), then ERASES the
- * legacy pair_profile so a stale profile cannot resurrect as the fallback
- * after calibration. On any failure the whole transaction is left uncommitted
- * and the error is logged.
+ * Write point for the guided-pairing completion path (the only pair-calibration
+ * writer; NVS pairing state is written EXCLUSIVELY when the wizard completes —
+ * cancel / reboot / no-match must never write). Storing a calibration
+ * atomically writes the 23-byte blob (pair_calib) + its source group
+ * (pair_group), then ERASES the legacy pair_profile so a stale profile cannot
+ * resurrect as the fallback after calibration. On any failure the whole
+ * transaction is left uncommitted and the error is logged.
  */
 void pair_calib_store_nvs(const uint8_t *calib, uint8_t source_group)
 {
@@ -82,6 +82,9 @@ void pair_calib_store_nvs(const uint8_t *calib, uint8_t source_group)
     }
     if (err == ESP_OK) {
         err = nvs_erase_key(h, NVS_KEY_PAIR_PROFILE);
+    }
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK;   /* legacy pair_profile never written → not an error */
     }
     if (err == ESP_OK) {
         err = nvs_commit(h);
