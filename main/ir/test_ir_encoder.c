@@ -13,6 +13,8 @@
  * builder that ir_send_raw_nec() feeds into the RMT copy encoder. The RMT
  * transmit path (channel init, carrier, rmt_transmit) is intentionally NOT
  * linked here; the brief scopes the host test to the pure encoder layer.
+ * Test 4 additionally covers ir_encode_nec_var() with the short-header
+ * (Samsung-style 4.5ms) leader used by the W9 Mi-DB candidate profiles.
  */
 #ifdef IR_SELFTEST
 
@@ -75,6 +77,29 @@ int main(void)
         { 562, IR_NEC_TRAIL_IDLE_US },
     };
 
+    /* Known-true NECx short-header (Samsung-style 4.5ms) frame for
+     * ir_encode_nec_var(0x0D0D, 0x0B, 4500, 4521) — the xm_1_124 Hisense
+     * candidate POWER frame (freq 37910 Hz).  On-wire bytes (LSB-first):
+     * 0x0D 0x0D 0x0B 0xF4. */
+    static const uint32_t EXPECTED3[34][2] = {
+        /* short leader (4500/4521, IR_NEC_SHORT_*) */
+        { IR_NEC_SHORT_LEADER_MARK_US, IR_NEC_SHORT_LEADER_SPACE_US },
+        /* addr_low 0x0D = b00001101, LSB-first: 1,0,1,1,0,0,0,0 */
+        { 562, 1690 }, { 562, 562 }, { 562, 1690 }, { 562, 1690 },
+        { 562, 562 }, { 562, 562 }, { 562, 562 }, { 562, 562 },
+        /* addr_high 0x0D = b00001101, LSB-first: 1,0,1,1,0,0,0,0 */
+        { 562, 1690 }, { 562, 562 }, { 562, 1690 }, { 562, 1690 },
+        { 562, 562 }, { 562, 562 }, { 562, 562 }, { 562, 562 },
+        /* cmd 0x0B = b00001011, LSB-first: 1,1,0,1,0,0,0,0 */
+        { 562, 1690 }, { 562, 1690 }, { 562, 562 }, { 562, 1690 },
+        { 562, 562 }, { 562, 562 }, { 562, 562 }, { 562, 562 },
+        /* ~cmd 0xF4 = b11110100, LSB-first: 0,0,1,0,1,1,1,1 */
+        { 562, 562 }, { 562, 562 }, { 562, 1690 }, { 562, 562 },
+        { 562, 1690 }, { 562, 1690 }, { 562, 1690 }, { 562, 1690 },
+        /* ending: trailing 562us mark + idle */
+        { 562, IR_NEC_TRAIL_IDLE_US },
+    };
+
     ir_symbol_t syms[40];
     size_t n = ir_encode_nec(0x04, 0x1F, syms, sizeof(syms) / sizeof(syms[0]));
 
@@ -115,6 +140,39 @@ int main(void)
             return 1;
         }
     }
+
+    /* Test 4: NECx short-header (Samsung-style 4.5ms) frame via
+     * ir_encode_nec_var — 0x0D0D 0x0B with 4500/4521 leader → 34 symbols,
+     * leader exactly the short values, data bytes 0D 0D 0B F4. */
+    size_t n3 = ir_encode_nec_var(0x0D0D, 0x0B,
+                                  IR_NEC_SHORT_LEADER_MARK_US,
+                                  IR_NEC_SHORT_LEADER_SPACE_US,
+                                  syms, sizeof(syms) / sizeof(syms[0]));
+    ASSERT(n3 == 34, "short-header: expected exactly 34 symbols");
+    ASSERT((syms[0] == (ir_symbol_t)ir_symbol_make(
+            IR_NEC_SHORT_LEADER_MARK_US, IR_NEC_SHORT_LEADER_SPACE_US)),
+           "short-header: symbol 0 must be the 4.5ms leader");
+    for (size_t i = 0; i < 34; i++) {
+        ir_symbol_t want = ir_symbol_make(EXPECTED3[i][0], EXPECTED3[i][1]);
+        if (syms[i] != want) {
+            printf("IR_SELFTEST_FAIL: short-header symbol %u = 0x%08X, want 0x%08X\n",
+                   (unsigned)i, (unsigned)syms[i], (unsigned)want);
+            return 1;
+        }
+    }
+    /* Rebuild the 32 data bits (skipping the leader at syms[0]) and confirm
+     * the four bytes are 0x0D, 0x0D, 0x0B, 0xF4. */
+    frame = 0;
+    for (int i = 0; i < 32; i++) {
+        uint32_t space = (syms[1 + i] >> 16) & 0x7FFFu;
+        if (space == IR_NEC_BIT1_SPACE_US) {
+            frame |= (1u << i);
+        }
+    }
+    ASSERT((frame & 0xFFu) == 0x0Du, "short-header byte0 (addr_low) must be 0x0D");
+    ASSERT(((frame >> 8) & 0xFFu) == 0x0Du, "short-header byte1 (addr_high) must be 0x0D");
+    ASSERT(((frame >> 16) & 0xFFu) == 0x0Bu, "short-header byte2 (command) must be 0x0B");
+    ASSERT(((frame >> 24) & 0xFFu) == 0xF4u, "short-header byte3 (~command) must be ~0x0B & 0xFF");
 
     printf("IR_SELFTEST_PASS\n");
     return 0;

@@ -407,11 +407,25 @@ static esp_err_t handle_api_key(httpd_req_t *req)
         if (p == NULL) {
             return send_json(req, "400 Bad Request", "{\"error\":\"invalid profile\"}");
         }
-        uint16_t addr = 0;
-        uint8_t cmd = 0;
-        sent = ir_db_find_key(p, (ir_key_t)key, &addr, &cmd);
-        if (sent) {
-            ir_send_raw_nec(addr, cmd);
+        /* W13: raw-frame keysets transmit the stored waveform (their frames
+         * are not 32-bit NEC).  Check the raw table FIRST — cmds[i] is only
+         * a definedness marker (0xFE) and must never go out as an NEC byte. */
+        const ir_raw_frame_t *rf = ir_profile_raw_frame(p, (ir_key_t)key);
+        if (rf != NULL) {
+            ir_send_raw_us(rf->frame, rf->n_pairs);
+            sent = true;
+        } else {
+            uint16_t addr = 0;
+            uint8_t cmd = 0;
+            sent = ir_db_find_key(p, (ir_key_t)key, &addr, &cmd);
+            if (sent) {
+                /* The explicit-profile_id branch tests the candidate group's own
+                 * frame: short-header (Samsung-style 4.5ms) groups must send with
+                 * their profile leader, not the standard 9 ms one. */
+                uint16_t lm, ls;
+                ir_profile_leader(p, &lm, &ls);
+                ir_send_raw_nec_var(addr, cmd, lm, ls);
+            }
         }
     } else {
         /* Normal remote use: resolve through the unified calib-aware path
@@ -659,12 +673,21 @@ static int wizard_send_current(void)
     if (g == NULL) {
         return 0;
     }
+    /* W13: raw-frame candidate keysets are transmitted from their stored
+     * waveform; the NEC path below only serves real NEC/NECx groups. */
+    const ir_raw_frame_t *rf = ir_profile_raw_frame(g, key);
+    if (rf != NULL) {
+        ir_send_raw_us(rf->frame, rf->n_pairs);
+        return 1;
+    }
     uint16_t addr = 0;
     uint8_t cmd = 0;
     if (!ir_db_find_key(g, key, &addr, &cmd)) {
         return 0;   /* undefined in the candidate group: never fabricate */
     }
-    ir_send_raw_nec(addr, cmd);
+    uint16_t lm, ls;
+    ir_profile_leader(g, &lm, &ls);
+    ir_send_raw_nec_var(addr, cmd, lm, ls);
     return 1;
 }
 
@@ -675,8 +698,13 @@ static esp_err_t handle_api_pair_start(httpd_req_t *req)
     if (len <= 0) {
         return send_json(req, "400 Bad Request", "{\"error\":\"empty body\"}");
     }
-    wizard_ctx_t *ctx = wizard_start(ir_db_profile_table(),
-                                     ir_db_get_profile_count());
+    const uint8_t *wizard_ids = NULL;
+    const ir_profile_t *const *wizard_groups = ir_db_wizard_order(&wizard_ids);
+    wizard_ctx_t *ctx = wizard_start(wizard_groups, ir_db_get_profile_count());
+    /* W13: the wizard tests the raw-frame keysets first; source_group is an
+     * index into that reordered list, so hand the wizard its group-index ->
+     * real-PROFILES-index mapping before any answer arrives. */
+    wizard_set_profile_ids(ctx, wizard_ids);
     if (ctx->phase == WIZARD_PHASE_DONE &&
         ctx->source_group == WIZARD_NOMATCH) {
         /* Every candidate group is power-less: terminal, no NVS write. */
@@ -729,8 +757,11 @@ static esp_err_t handle_api_pair_answer(httpd_req_t *req)
         if (ctx->source_group != WIZARD_NOMATCH) {
             /* Completion with a locked group: write the calibration (the ONLY
              * wizard write point — never called on cancel / reboot / no-match),
-             * then drop back to IDLE so status reports idle + calib present. */
-            pair_calib_store_nvs(ctx->keymap, ctx->source_group);
+             * then drop back to IDLE so status reports idle + calib present.
+             * source_group is a WIZARD-ORDER index; map it to the REAL PROFILES
+             * index (NVS profile-id semantics) before storing. */
+            uint8_t real_id = wizard_core_real_group_id(ctx);
+            pair_calib_store_nvs(ctx->keymap, real_id);
             wizard_cancel();
             return send_json(req, "200 OK",
                              "{\"ok\":true,\"wizard\":{\"state\":\"done\"},\"done\":true}");

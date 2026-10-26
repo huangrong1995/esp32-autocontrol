@@ -67,6 +67,11 @@ typedef struct {
     uint8_t phase;                     /* wizard_phase_t */
     const ir_profile_t *const *groups; /* extension: candidate profiles */
     uint8_t group_count;               /* extension: number of candidates */
+    /* W13 (tail-appended): parallel mapping from a wizard group index to the
+     * REAL PROFILES index (NVS profile-id semantics).  When non-NULL,
+     * source_group indexes this array; when NULL it IS the real index
+     * (identity — the pure-logic self-test keeps passing unchanged). */
+    const uint8_t *profile_ids;
 } wizard_ctx_t;
 
 /* Global single-instance context (per-TU static, same as macro_core.h). */
@@ -84,6 +89,28 @@ static inline void wizard_core_reset(wizard_ctx_t *ctx)
     ctx->phase        = WIZARD_PHASE_IDLE;
     ctx->groups       = NULL;
     ctx->group_count  = 0;
+    ctx->profile_ids  = NULL;
+}
+
+/* The REAL PROFILES index of the locked source group — the value to store in
+ * NVS (source_group is a wizard-order index when profile_ids is set). */
+static inline uint8_t wizard_core_real_group_id(const wizard_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx->source_group == WIZARD_NOMATCH) {
+        return WIZARD_NOMATCH;
+    }
+    return (ctx->profile_ids != NULL) ? ctx->profile_ids[ctx->source_group]
+                                      : ctx->source_group;
+}
+
+/* W13: hand the wizard its group-index -> real-PROFILES-index mapping.  Must
+ * be called right after wizard_start().  NULL restores identity (self-test). */
+static inline void wizard_set_profile_ids(wizard_ctx_t *ctx,
+                                          const uint8_t *profile_ids)
+{
+    if (ctx != NULL) {
+        ctx->profile_ids = profile_ids;
+    }
 }
 
 /*

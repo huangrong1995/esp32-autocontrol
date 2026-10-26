@@ -3,6 +3,7 @@ idf_component_register(
         "main.cc"
         "ir/ir_encoder.cc"
         "ir/ir_db.cc"
+        "ir/ir_raw_db.cc"
         "app/remote_state.cc"
         "app/macro_engine.cc"
         "app/wifi_ap.cc"

@@ -12,6 +12,7 @@ static const char *TAG = "ir_encoder";
 
 #define IR_RMT_RESOLUTION_HZ 1000000u /* 1 tick = 1 us */
 #define IR_NEC_SYMBOLS        34u     /* leader + 32 data bits + ending */
+#define IR_RMT_MAX_SYMBOLS    64u     /* mem_block_symbols (also raw-frame cap) */
 #define IR_RMT_TIMEOUT_MS     200u
 
 static rmt_channel_handle_t s_tx_chan = NULL;
@@ -61,12 +62,14 @@ static void rmt_tx_init(void)
     ESP_LOGI(TAG, "RMT TX ready: gpio=%d carrier=%dHz", CONFIG_IR_TX_GPIO, CONFIG_IR_CARRIER_HZ);
 }
 
-void ir_send_raw_nec(uint16_t address, uint8_t command)
+void ir_send_raw_nec_var(uint16_t address, uint8_t command,
+                         uint16_t leader_mark_us, uint16_t leader_space_us)
 {
     rmt_tx_init();
 
     ir_symbol_t packed[IR_NEC_SYMBOLS];
-    size_t n = ir_encode_nec(address, command, packed, IR_NEC_SYMBOLS);
+    size_t n = ir_encode_nec_var(address, command, leader_mark_us, leader_space_us,
+                                 packed, IR_NEC_SYMBOLS);
     if (n == 0) {
         ESP_LOGE(TAG, "NEC encode failed (addr=0x%02X cmd=0x%02X)", address, command);
         return;
@@ -86,7 +89,49 @@ void ir_send_raw_nec(uint16_t address, uint8_t command)
     };
     ESP_ERROR_CHECK(rmt_transmit(s_tx_chan, s_copy_enc, words, sizeof(rmt_symbol_word_t) * n, &tx_cfg));
     ESP_ERROR_CHECK(rmt_tx_wait_all_done(s_tx_chan, IR_RMT_TIMEOUT_MS));
-    ESP_LOGI(TAG, "sent NEC addr=0x%02X cmd=0x%02X (%u symbols)", address, command, (unsigned)n);
+    ESP_LOGI(TAG, "sent NEC addr=0x%02X cmd=0x%02X (%u symbols, leader %u/%u)",
+             address, command, (unsigned)n,
+             (unsigned)leader_mark_us, (unsigned)leader_space_us);
+}
+
+void ir_send_raw_nec(uint16_t address, uint8_t command)
+{
+    ir_send_raw_nec_var(address, command,
+                        IR_NEC_LEADER_MARK_US, IR_NEC_LEADER_SPACE_US);
+}
+
+void ir_send_raw_us(const uint16_t *frame, size_t n_pairs)
+{
+    if (frame == NULL || n_pairs == 0) {
+        ESP_LOGW(TAG, "raw send: empty frame (n_pairs=%u)", (unsigned)n_pairs);
+        return;
+    }
+    if (n_pairs > IR_RMT_MAX_SYMBOLS) {
+        ESP_LOGW(TAG, "raw send: %u pairs exceeds %u-symbol RMT block; truncating",
+                 (unsigned)n_pairs, IR_RMT_MAX_SYMBOLS);
+        n_pairs = IR_RMT_MAX_SYMBOLS;
+    }
+
+    rmt_tx_init();
+
+    rmt_symbol_word_t words[IR_RMT_MAX_SYMBOLS];
+    for (size_t i = 0; i < n_pairs; i++) {
+        /* frame is [mark,space,...,mark,space]; the last space is the
+         * trailing idle, clamped to 0x7FFF by ir_symbol_make(). */
+        words[i].val = ir_symbol_make(frame[2 * i], frame[2 * i + 1]);
+    }
+
+    rmt_transmit_config_t tx_cfg = {
+        .loop_count = 0, /* one frame per press */
+        .flags = {
+            .eot_level = 0,
+            .queue_nonblocking = false,
+        },
+    };
+    ESP_ERROR_CHECK(rmt_transmit(s_tx_chan, s_copy_enc, words,
+                                 sizeof(rmt_symbol_word_t) * n_pairs, &tx_cfg));
+    ESP_ERROR_CHECK(rmt_tx_wait_all_done(s_tx_chan, IR_RMT_TIMEOUT_MS));
+    ESP_LOGI(TAG, "sent raw frame of %u (mark,space) pairs", (unsigned)n_pairs);
 }
 
 bool ir_send_key(ir_key_t key)
@@ -108,17 +153,39 @@ bool ir_send_key(ir_key_t key)
 
     uint16_t addr = 0;
     uint8_t cmd = 0;
+    const ir_profile_t *p = ir_db_get_profile(profile_id);
+
+    /* W13: raw-frame keysets send the stored waveform directly (their frames
+     * are not 32-bit NEC — cmds[] only holds a definedness marker).  Intercept
+     * BEFORE pair_resolve_key, which is the pure NEC resolver.  Definedness
+     * still follows the calib/legacy rule: a 0xFF slot (calib no-reaction, or
+     * cmds 0xFF) is never sent, exactly like the NEC path. */
+    const ir_raw_frame_t *rf = ir_profile_raw_frame(p, key);
+    if (rf != NULL) {
+        if (calib_len == IR_KEY_COUNT && calib_buf[key] == 0xFF) {
+            ESP_LOGW(TAG, "profile '%s' key=%d calib-undefined; skip",
+                     p ? p->name : "?", (int)key);
+            return false;
+        }
+        ESP_LOGI(TAG, "key=%d -> profile_id=%u raw frame (%u pairs)",
+                 (int)key, (unsigned)profile_id, (unsigned)rf->n_pairs);
+        ir_send_raw_us(rf->frame, rf->n_pairs);
+        return true;
+    }
+
     if (!pair_resolve_key(calib_len ? calib_buf : NULL, calib_len, profile_id,
                           key, &addr, &cmd)) {     /* 未定义键:log skip;return; */
-        const ir_profile_t *p = ir_db_get_profile(profile_id);
         ESP_LOGW(TAG, "profile '%s' key=%d undefined; skip",
                  p ? p->name : "?", (int)key);
         return false;
     }
 
+    uint16_t lm, ls;
+    ir_profile_leader(p, &lm, &ls);   /* calib 档沿用同 profile 的 leader */
+
     ESP_LOGI(TAG, "key=%d -> profile_id=%u NEC addr=0x%02X cmd=0x%02X",
              (int)key, (unsigned)profile_id, addr, cmd);
-    ir_send_raw_nec(addr, cmd);
+    ir_send_raw_nec_var(addr, cmd, lm, ls);
     return true;
 }
 
