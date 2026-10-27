@@ -435,7 +435,12 @@ esp_err_t macro_play(uint8_t id)
     if (s_mutex == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (remote_state_get_profile() >= ir_db_get_profile_count()) {
+    /* A valid wizard calibration counts as paired even when the legacy
+     * profile was erased (calib pairing stores the source group in NVS and
+     * clears pair_profile).  Mirror the unified test in handle_api_key so
+     * macro playback works for calib-only pairings (raw keysets included). */
+    if (!pair_calib_active() &&
+        remote_state_get_profile() >= ir_db_get_profile_count()) {
         return ESP_ERR_INVALID_STATE;   /* unpaired -> 400 "not paired" */
     }
     if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
