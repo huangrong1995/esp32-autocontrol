@@ -39,6 +39,8 @@ static const char *TAG = "macro_engine";
 #define MACRO_NVS_NAMESPACE   "macros"
 #define MACRO_NVS_INDEX_KEY   "macro_index"
 #define MACRO_NVS_NEXT_KEY    "macro_next"
+#define MACRO_NVS_ONEKEY_KEY  "one_key"
+#define MACRO_NVS_SELFSTART_KEY "auto_play"
 #define MACRO_STACK_BYTES     4096
 #define MACRO_STACK_WORDS     (MACRO_STACK_BYTES / sizeof(StackType_t))
 #define MACRO_INDEX_BLOB_BYTES (sizeof(macro_info_t) * MACRO_INDEX_MAX)
@@ -49,6 +51,8 @@ static const char *TAG = "macro_engine";
 static macro_state_t  s_state;
 static volatile uint8_t  s_play_stop;          /* abort flag for macro_core_replay */
 static volatile uint16_t s_play_step;          /* 1-based current playback step */
+static volatile uint8_t  s_one_key;            /* one-key macro binding, 0xFF = none */
+static volatile uint8_t  s_selfstart;          /* power-on auto-replay flag, 0/1 */
 static uint8_t         s_snapshot_step_count;
 static macro_step_t    s_snapshot[MACRO_MAX_STEPS];
 static TaskHandle_t    s_play_task;
@@ -99,6 +103,25 @@ static void macro_index_load_from_nvs(void)
     }
 }
 
+/* Load the persisted one-key macro binding (u8, 0xFF sentinel = none). On a
+ * missing key or NVS error the binding starts cleared. */
+static void macro_onekey_load_from_nvs(void)
+{
+    s_one_key = MACRO_ONEKEY_NONE;
+    nvs_handle_t h;
+    if (nvs_open(MACRO_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    uint8_t v = MACRO_ONEKEY_NONE;
+    esp_err_t err = nvs_get_u8(h, MACRO_NVS_ONEKEY_KEY, &v);
+    nvs_close(h);
+    if (err == ESP_OK) {
+        s_one_key = v;
+    } else if (err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "read one-key binding failed: %s", esp_err_to_name(err));
+    }
+}
+
 /* Persist the in-memory macro index blob to NVS. Returns ESP_OK on success. */
 static esp_err_t macro_index_store_to_nvs(void)
 {
@@ -113,6 +136,57 @@ static esp_err_t macro_index_store_to_nvs(void)
         err = nvs_set_u8(h, MACRO_NVS_NEXT_KEY,
                          macro_core_index_get_next_id());
     }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+/* Persist the one-key macro binding (u8, 0xFF sentinel = none). */
+static esp_err_t macro_onekey_store(uint8_t id)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(MACRO_NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_u8(h, MACRO_NVS_ONEKEY_KEY, id);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+/* Load the persisted power-on auto-replay flag (u8, 0/1). On a missing key or
+ * NVS error the flag starts off (0) — auto-replay is always opt-in. */
+static void macro_selfstart_load_from_nvs(void)
+{
+    s_selfstart = 0;
+    nvs_handle_t h;
+    if (nvs_open(MACRO_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    uint8_t v = 0;
+    esp_err_t err = nvs_get_u8(h, MACRO_NVS_SELFSTART_KEY, &v);
+    nvs_close(h);
+    if (err == ESP_OK) {
+        s_selfstart = (v != 0u) ? 1u : 0u;
+    } else if (err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "read auto-replay flag failed: %s", esp_err_to_name(err));
+    }
+}
+
+/* Persist the power-on auto-replay flag (u8, 0/1). */
+static esp_err_t macro_selfstart_store(uint8_t on)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(MACRO_NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_u8(h, MACRO_NVS_SELFSTART_KEY, on ? 1u : 0u);
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }
@@ -284,8 +358,11 @@ void macro_engine_init(void)
     s_play_task = NULL;
     macro_core_record_reset();
     macro_index_load_from_nvs();
-    ESP_LOGI(TAG, "macro engine init: %u stored macro(s)",
-             (unsigned)macro_core_index_count);
+    macro_onekey_load_from_nvs();
+    macro_selfstart_load_from_nvs();
+    ESP_LOGI(TAG, "macro engine init: %u stored macro(s), one-key=%u, auto_play=%u",
+             (unsigned)macro_core_index_count, (unsigned)s_one_key,
+             (unsigned)s_selfstart);
 }
 
 esp_err_t macro_start_recording(void)
@@ -507,6 +584,18 @@ static esp_err_t macro_delete_locked(uint8_t id)
         return ESP_ERR_NOT_FOUND;
     }
     (void)macro_steps_erase(id);   /* non-fatal if the steps blob is absent */
+    /* A one-key binding pointing at the deleted macro must not dangle; clear
+     * it best-effort (a surviving binding would still be harmless — the
+     * button path macro_play() returns NOT_FOUND for a vanished id). */
+    uint8_t prior_one_key = (uint8_t)s_one_key;
+    s_one_key = macro_core_onekey_after_delete(prior_one_key, id);
+    if (s_one_key != prior_one_key) {
+        esp_err_t e = macro_onekey_store(MACRO_ONEKEY_NONE);
+        if (e != ESP_OK) {
+            ESP_LOGW(TAG, "macro_delete: clearing one-key binding failed: %s",
+                     esp_err_to_name(e));
+        }
+    }
     esp_err_t ret = macro_index_store_to_nvs();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "macro_delete: index store failed: %s",
@@ -604,4 +693,122 @@ int macro_is_playing(void)
 int macro_is_recording(void)
 {
     return (macro_get_state() == MACRO_STATE_RECORDING);
+}
+
+esp_err_t macro_set_onekey(uint8_t id)
+{
+    if (s_mutex == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (macro_core_index_find(id) < 0) {
+        xSemaphoreGive(s_mutex);
+        return ESP_ERR_NOT_FOUND;
+    }
+    esp_err_t err = macro_onekey_store(id);
+    if (err == ESP_OK) {
+        s_one_key = id;
+        ESP_LOGI(TAG, "one-key macro bound to id=%u", (unsigned)id);
+    } else {
+        ESP_LOGE(TAG, "macro_set_onekey: NVS store failed: %s",
+                 esp_err_to_name(err));
+    }
+    xSemaphoreGive(s_mutex);
+    return err;
+}
+
+esp_err_t macro_clear_onekey(uint8_t id)
+{
+    if (s_mutex == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_one_key == id) {
+        esp_err_t err = macro_onekey_store(MACRO_ONEKEY_NONE);
+        if (err == ESP_OK) {
+            s_one_key = MACRO_ONEKEY_NONE;
+            ESP_LOGI(TAG, "one-key macro cleared (was id=%u)", (unsigned)id);
+        } else {
+            ESP_LOGE(TAG, "macro_clear_onekey: NVS store failed: %s",
+                     esp_err_to_name(err));
+            xSemaphoreGive(s_mutex);
+            return err;
+        }
+    }
+    xSemaphoreGive(s_mutex);
+    return ESP_OK;
+}
+
+uint8_t macro_get_onekey(void)
+{
+    return (uint8_t)s_one_key;
+}
+
+/* Set or clear the power-on auto-replay flag (0/1). NVS is written only on an
+ * actual change, so a flag that never flips causes no flash wear. */
+esp_err_t macro_set_selfstart(uint8_t on)
+{
+    if (s_mutex == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    on = (on != 0u) ? 1u : 0u;
+    esp_err_t ret = ESP_OK;
+    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_selfstart == on) {
+        xSemaphoreGive(s_mutex);
+        return ret;
+    }
+    esp_err_t err = macro_selfstart_store(on);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "macro_set_selfstart: NVS store failed: %s",
+                 esp_err_to_name(err));
+        xSemaphoreGive(s_mutex);
+        return err;
+    }
+    s_selfstart = on;
+    ESP_LOGI(TAG, "power-on auto-replay %s", on ? "enabled" : "disabled");
+    xSemaphoreGive(s_mutex);
+    return ret;
+}
+
+uint8_t macro_get_selfstart(void)
+{
+    return (uint8_t)s_selfstart;
+}
+
+/* Power-on auto-replay hook. Mirrors the pairing gate of macro_play() (which
+ * also carries its own busy gate), so boot replay behaves exactly like a
+ * page/button-triggered playback — no IR when unpaired, no IR before the
+ * engine is ready. Call ONCE from app_main after macro_engine_init(). */
+void macro_engine_selfstart(void)
+{
+    if (s_mutex == NULL) {
+        ESP_LOGE(TAG, "selfstart: engine not initialized");
+        return;
+    }
+    if (!s_selfstart) {
+        ESP_LOGI(TAG, "selfstart: power-on auto-replay disabled");
+        return;
+    }
+    uint8_t one_key = (uint8_t)s_one_key;
+    if (one_key == MACRO_ONEKEY_NONE) {
+        ESP_LOGW(TAG, "selfstart: no one-key macro bound");
+        return;
+    }
+    if (!pair_calib_active() &&
+        remote_state_get_profile() >= ir_db_get_profile_count()) {
+        ESP_LOGW(TAG, "selfstart: not paired, skipping auto-replay");
+        return;
+    }
+    ESP_LOGI(TAG, "selfstart: playing one-key macro id=%u", (unsigned)one_key);
+    esp_err_t err = macro_play(one_key);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "selfstart: replay returned %s", esp_err_to_name(err));
+    }
 }

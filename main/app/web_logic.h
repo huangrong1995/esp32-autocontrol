@@ -143,11 +143,15 @@ static inline void web_escape_json(const char *src, char *dst, size_t cap)
  *   {"paired_profile":N,"paired_name":"...","macros":[
  *       {"id":..,"name":"..","step_count":..,"first_key":"POWER"},
  *       ...
- *    ],"playback":{"state":"idle|recording|playing","current_step":N}}
+ *    ],"playback":{"state":"idle|recording|playing","current_step":N},
+ *    "one_key":N,"selfstart":N}
  *
  * `macros` is the engine's real list (`macros_array`/`macros_count`, may be
  * NULL/0). `first_key` uses the same wire names as web_parse_key_name
- * ("POWER"), "" when the macro has no first key.
+ * ("POWER"), "" when the macro has no first key. `one_key_id` is the one-key
+ * (physical button) macro binding (0xFF = none). `selfstart` is the power-on
+ * auto-replay flag (0/1): when 1, the device replays the one-key macro once
+ * after boot.
  *
  * Returns the number of bytes written (excluding the NUL terminator), or -1
  * if the buffer is too small. `paired_name` is the built-in profile's display
@@ -156,6 +160,7 @@ static inline void web_escape_json(const char *src, char *dst, size_t cap)
 static inline int web_format_status(uint8_t paired_profile, const char *paired_name,
                                     const macro_info_t *macros_array, uint8_t macros_count,
                                     const char *playback_state, unsigned current_step,
+                                    uint8_t one_key_id, uint8_t selfstart,
                                     char *buf, size_t cap)
 {
     if (paired_name == NULL) {
@@ -187,8 +192,8 @@ static inline int web_format_status(uint8_t paired_profile, const char *paired_n
                (i ? "," : ""), (unsigned)m->id, esc_name,
                (unsigned)m->step_count, web_key_name(m->first_key));
     }
-    APPEND("],\"playback\":{\"state\":\"%s\",\"current_step\":%u}}",
-           playback_state, current_step);
+    APPEND("],\"playback\":{\"state\":\"%s\",\"current_step\":%u},\"one_key\":%u,\"selfstart\":%u}",
+           playback_state, current_step, (unsigned)one_key_id, (unsigned)selfstart);
 #undef APPEND
     return (off < cap) ? (int)off : -1;
 }

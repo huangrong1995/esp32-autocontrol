@@ -14,6 +14,10 @@
 - **虚拟遥控器**:POWER / 数字 / 方向 / 确认 / 音量 / 频道 / 静音 / 菜单等 23 键。
 - **宏录制与回放**:录制按键序列与每步等待时间,命名存储(≤23 字),一键回放;
   回放中实时显示当前步,可随时「停止回放」中断。
+- **一键宏物理按键**:把任意宏标为「按键宏」后,短按 GPIO5 物理键(接地)即回放
+  该宏——不掏手机、不开页面;绑定存 NVS 断电不丢。
+- **上电自动回放**:可配置「上电自动回放按键宏」,电源上电后自动回放当前绑定的
+  按键宏一次(需已配对;未配对/未绑定则跳过并记日志)。
 - **开机宏保护**:宏首键是 POWER 时,回放前会弹确认框。
 
 ## 硬件接线
@@ -23,6 +27,15 @@
 | VCC | 3.3V |
 | GND | GND |
 | DAT | **GPIO4**(默认,可在 menuconfig 改) |
+
+| 一键宏按键(两线) | ESP32-WROOM-32 |
+|---|---|
+| 按键一端 | **GPIO5**(默认,可在 menuconfig 改) |
+| 按键另一端 | GND |
+
+> 一键宏按键:任意轻触/微动开关,一端接 GPIO5、另一端接 GND,不接上拉电阻——
+> 固件使能内部上拉,**按下=低电平**,60ms 防抖后播放网页上绑定的「按键宏」。
+> 上电时按住不会误触发(启动即按下需先松开再按)。
 
 > 发射模块为 DAT/VCC/GND 三线 IR LED 发射板(非 HX1838 接收头)。经典 ESP32 的
 > GPIO 输出电流有限(约 40mA/最大),大多数模块内置限流电阻可直接驱动;个别需
@@ -48,6 +61,7 @@ idf.py build
 |---|---|---|
 | `IR_TX_GPIO` | 4 | 红外发射 DAT 引脚 |
 | `IR_CARRIER_HZ` | 38000 | NEC 载波频率(38 kHz) |
+| `ONE_KEY_BTN_GPIO` | 5 | 一键宏按键引脚(接地触发,内部上拉) |
 | `AP_SSID` | `esp32-ir` | SoftAP 热点名 |
 | `AP_PASSWORD` | 空 | 留空 = 开放热点 |
 
@@ -72,6 +86,12 @@ idf.py -p /dev/ttyUSB0 flash monitor
 6. **回放**:在宏列表点「播放」;若宏首键是 POWER,会先弹确认(电视是否已关闭)。
    回放中可点「停止回放」中断,或等待播完。
 7. **删除宏**:点「删除」并确认。
+8. **设一键宏(可选)**:在宏列表点某宏右侧的「按键宏」(变绿为「按键宏 ✓」),
+   此后短按 GPIO5 物理键即可随时回放该宏;再点一次取消。一次只能有一个「按键宏」,
+   新绑定自动替换旧绑定;删除已绑定的宏会自动清掉该绑定。
+9. **上电自动回放(可选)**:绑定「按键宏」后,勾选宏区顶部的「上电自动回放按键宏」。
+   之后每次电源上电,设备自动回放当前绑定的按键宏一次(需已配对);取消勾选后恢复
+   手动。解除按键宏绑定会自动取消该勾选。
 
 ## 配对向导
 
@@ -125,6 +145,16 @@ idf.py -p /dev/ttyUSB0 flash monitor
 | POST | `/api/key/raw` | 发原始 NEC 帧 `{"address":0x04,"command":0x1F}`(开发/码源验证) |
 | POST | `/api/macro/start` / `step` / `save` / `play` / `stop` / `delete` | 宏录制/回放/删除 |
 
+`POST /api/macro/play` 另接受可选布尔字段 `one_key`,同时复用为「一键宏」绑定接口:
+`{"id":N,"one_key":true}` 把宏 N 绑为按键宏(并照常回放,缺 N 返回 404);
+`{"id":N,"one_key":false}` 仅当 N 为当前绑定时解除。绑定/解除与回放状态无关——
+回放中也能绑定,之后按键即可播。
+
+`POST /api/macro/play` 还接受可选布尔字段 `selfstart`,复用为「上电自动回放」开关
+(仍不新增路由):`{"id":N,"selfstart":true}` 开启(宏 N 须为当前按键宏),
+`{"id":N,"selfstart":false}` 关闭。`GET /api/status` 新增根字段 `"selfstart":0/1`
+(0=关、1=开,默认 0),布尔值字段只做 additive 扩展,老前端兼容。
+
 错误统一返回 `{"error":"..."}`(英文串,网页端会显示为中文提示)。
 
 ## 常见问题
@@ -137,6 +167,13 @@ idf.py -p /dev/ttyUSB0 flash monitor
   - 注意「电源」键有些电视是离散开关码,重复按不一定每下都有反应。
 - **如何中断回放**:网页宏区点「停止回放」。回放中按键网格会禁用(急停不应通过
   点按键触发),需用「停止回放」按钮。
+- **按物理键没反应**:确认按键接线(GPIO5↔GND,见上文「硬件接线」)、网页上已把
+  某宏设为「按键宏 ✓」;回放/录制中按键会被忽略(防竞争),待到空闲再按。启动日志
+  应出现 `one-key button init: GPIO5 active-low`;`ONE_KEY_BTN_GPIO` 与
+  `IR_TX_GPIO` 相同会导致按键被禁用(日志提示),需改为不同引脚。
+- **上电不自动回放**:勾选「上电自动回放按键宏」要求已配对 + 已绑定「按键宏」。
+  上电回放前电视需已通电;若宏首键是 POWER,仍会先弹确认(同手动回放)。启动日志
+  可见 `selfstart: ...` 说明为何跳过(未开启/未绑定/未配对)。
 - **分区与存储**:自定义分区表 `partitions/4m.csv` —— `nvs`(0x9000 起,32KB)、
   `phy_init`、`factory` 应用分区(0x20000 起,约 1.9MB)。配对档、宏索引与步骤
   都存在 NVS,**断电不丢**。容量:最多 16 条宏,每条 ≤ 100 步。
@@ -154,7 +191,8 @@ idf.py -p /dev/ttyUSB0 flash monitor
 cc -Wall -DIR_SELFTEST   -I main -o /tmp/ir    main/ir/test_ir_encoder.c   && /tmp/ir
 cc -Wall -DWEB_LOGIC_SELFTEST -I main -o /tmp/wl main/app/test_web_logic.c && /tmp/wl
 cc -Wall -I main -o /tmp/macro main/app/test_macro_engine.c                && /tmp/macro
+cc -Wall -I main -o /tmp/bt    main/app/test_button_core.c                && /tmp/bt
 ```
 
 通过时分别输出 `IR_SELFTEST_PASS` / `WEB_LOGIC_SELFTEST_PASS` /
-`MACRO_SELFTEST_PASS` 且退出码 0。
+`MACRO_SELFTEST_PASS` / `BTN_SELFTEST_PASS` 且退出码 0。

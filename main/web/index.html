@@ -80,6 +80,9 @@
     border-radius: 10px; padding: 12px; margin-top: 12px;
   }
   #macroArea h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent); }
+  .macro-hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  button.onekey { background: #6b7280; font-size: 12px; padding: 5px 8px; }
+  button.onekey.on { background: var(--ok); }
   .macro {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 8px 0; border-top: 1px solid var(--border);
@@ -168,6 +171,8 @@
     <div class="grid grid-panel" id="keyGrid"></div>
     <section id="macroArea">
       <h2>宏</h2>
+      <p class="macro-hint">把宏标为「按键宏」后,按 GPIO5 物理键(短接到 GND)即可一键回放。</p>
+      <label class="macro-hint"><input type="checkbox" id="autostartChk" onchange="toggleAutostart()"> 上电自动回放按键宏</label>
       <div id="macroList"></div>
       <div id="macroRecControl"></div>
     </section>
@@ -448,9 +453,12 @@ function renderMacros(d) {
   } else {
     var html = '';
     macros.forEach(function (m) {
+      var isOne = (d.one_key === m.id);
       html += '<div class="macro">' +
         '<span class="macro-name">' + esc(m.name) + '</span>' +
         '<span class="macro-note">' + m.step_count + ' 步 · 首键 ' + esc(m.first_key || '—') + '</span>' +
+        '<button class="' + (isOne ? 'onekey on' : 'onekey') + '" onclick="toggleOneKey(' + m.id + ')">'
+          + (isOne ? '按键宏 ✓' : '按键宏') + '</button>' +
         '<button onclick="playMacro(' + m.id + ')">播放</button>' +
         '<button class="del" onclick="deleteMacro(' + m.id + ')">删除</button>' +
         '</div>';
@@ -508,6 +516,8 @@ function refreshStatus() {
       document.getElementById('macroList').innerHTML = '<p class="macro-empty">先配对,再使用宏</p>';
     }
     syncPlaybackPolling(d);
+    /* 上电自动回放勾选与服务端一致(解绑按键宏 / 服务端拒绝都会回卷)。 */
+    document.getElementById('autostartChk').checked = !!(d.selfstart);
     if (view === 'viewWizard') {
       /* 页面刷新(或 no_match 后停留)时从 status.wizard 恢复向导渲染。 */
       renderWizard(d.wizard || { state: 'idle' }, undefined);
@@ -565,6 +575,45 @@ function playMacro(id) {
   api('/api/macro/play', { method: 'POST', body: JSON.stringify({ id: id }) })
     .then(function () { setStatus('开始回放宏', 'ok'); refreshStatus(); })
     .catch(function (e) { setStatus('回放失败: ' + e.message, 'error'); refreshStatus(); });
+}
+
+function toggleOneKey(id) {
+  /* lastStatus.one_key is the whole binding (0xFF = none); a row is "on" when
+   * it equals this macro's id. Toggling reuses POST /api/macro/play with the
+   * one_key flag (no new route): 绑定/解绑后仍走回放,立刻能看到效果。
+   * 解绑时顺带关闭「上电自动回放」——没有绑定就没有可自动回放的宏。 */
+  var isOne = !!(lastStatus && lastStatus.one_key === id);
+  var body = { id: id, one_key: !isOne };
+  if (isOne) body.selfstart = false;
+  api('/api/macro/play', { method: 'POST', body: JSON.stringify(body) })
+    .then(function () {
+      setStatus(isOne ? '已取消按键宏' : '已设为按键宏 — 短按 GPIO5 即回放', 'ok');
+      refreshStatus();
+    })
+    .catch(function (e) { setStatus('设置按键宏失败: ' + e.message, 'error'); refreshStatus(); });
+}
+
+function toggleAutostart() {
+  /* id 取当前按键宏绑定;selfstart 仅是一个开关,上电时回放当时的绑定。
+   * 开启前必须有绑定,否则回卷勾选并提示。 */
+  var chk = document.getElementById('autostartChk');
+  var on = chk.checked;
+  var oneKey = (lastStatus && lastStatus.one_key !== undefined) ? lastStatus.one_key : 0xFF;
+  if (oneKey === 0xFF) {
+    chk.checked = false;
+    if (on) setStatus('请先设置「按键宏」,再开启上电自动回放', 'error');
+    return;
+  }
+  api('/api/macro/play', { method: 'POST', body: JSON.stringify({ id: oneKey, selfstart: on }) })
+    .then(function () {
+      setStatus(on ? '已开启上电自动回放' : '已关闭上电自动回放', 'ok');
+      refreshStatus();
+    })
+    .catch(function (e) {
+      chk.checked = !on;   /* 服务端拒绝时回滚勾选 */
+      setStatus('设置自动回放失败: ' + e.message, 'error');
+      refreshStatus();
+    });
 }
 
 function deleteMacro(id) {

@@ -6,9 +6,10 @@ idf_component_register(
         "ir/ir_raw_db.cc"
         "app/remote_state.cc"
         "app/macro_engine.cc"
+        "app/button_engine.cc"
         "app/wifi_ap.cc"
         "app/web_server.cc"
     INCLUDE_DIRS "."
-    REQUIRES driver esp_driver_rmt esp_http_server nvs_flash esp_wifi esp_netif esp_event esp_timer freertos
+    REQUIRES driver esp_driver_gpio esp_driver_rmt esp_http_server nvs_flash esp_wifi esp_netif esp_event esp_timer freertos
     EMBED_FILES "web/index.html"
 )

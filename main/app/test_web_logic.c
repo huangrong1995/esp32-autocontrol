@@ -75,7 +75,7 @@ int main(void)
     /* Test 3: unpaired /api/status payload -> paired_profile=0xFF, empty name,
      * empty macros array, idle playback. */
     char buf[256];
-    int n = web_format_status(0xFF, "", NULL, 0, "idle", 0, buf, sizeof(buf));
+    int n = web_format_status(0xFF, "", NULL, 0, "idle", 0, 0xFF, 0, buf, sizeof(buf));
     ASSERT(n > 0, "unpaired status format must succeed");
     ASSERT(strstr(buf, "\"paired_profile\":255") != NULL,
            "unpaired status must carry paired_profile=255");
@@ -85,10 +85,14 @@ int main(void)
            "status must carry the (empty) macros array");
     ASSERT(strstr(buf, "\"playback\":{\"state\":\"idle\",\"current_step\":0}") != NULL,
            "idle status must carry the idle playback block");
+    ASSERT(strstr(buf, "\"one_key\":255") != NULL,
+           "no one-key binding must read back as one_key=255");
+    ASSERT(strstr(buf, ",\"one_key\":255,\"selfstart\":0}") != NULL,
+           "selfstart is the LAST root field, right before the closing brace");
 
     /* Test 4: paired status carries the profile id + display name. */
-    n = web_format_status(0, "Hisense-A (NEC 0x04)", NULL, 0, "idle", 0,
-                          buf, sizeof(buf));
+    n = web_format_status(0, "Hisense-A (NEC 0x04)", NULL, 0, "idle", 0, 0xFF,
+                          0, buf, sizeof(buf));
     ASSERT(n > 0, "paired status format must succeed");
     ASSERT(strstr(buf, "\"paired_profile\":0") != NULL,
            "paired status must carry paired_profile=0");
@@ -106,7 +110,7 @@ int main(void)
     strcpy(macros[1].name, "VolUp");
     macros[1].step_count = 1;
     macros[1].first_key = IR_KEY_VOL_UP;
-    n = web_format_status(1, "Sony-B", macros, 2, "playing", 2, buf, sizeof(buf));
+    n = web_format_status(1, "Sony-B", macros, 2, "playing", 2, 5, 1, buf, sizeof(buf));
     ASSERT(n > 0, "status with macros must format");
     ASSERT(strstr(buf, "\"id\":3,\"name\":\"PowerOff\",\"step_count\":2,\"first_key\":\"POWER\"") != NULL,
            "macro 0 rendered with wire name POWER");
@@ -114,14 +118,18 @@ int main(void)
            "macro 1 rendered with wire name VOL+");
     ASSERT(strstr(buf, "\"playback\":{\"state\":\"playing\",\"current_step\":2}") != NULL,
            "playing status carries state + current_step");
+    ASSERT(strstr(buf, "\"one_key\":5") != NULL,
+           "macro-borne status carries a non-default one_key binding verbatim");
+    ASSERT(strstr(buf, "\"selfstart\":1") != NULL,
+           "macro-borne status carries the enabled auto-replay flag verbatim");
     ASSERT(strstr(buf, "\"paired_profile\":1") != NULL,
            "macro-bearing status still carries paired_profile");
 
     /* Test 6: undersized buffer -> -1, no buffer overflow. */
     char tiny[8];
-    ASSERT(web_format_status(0xFF, "", NULL, 0, "idle", 0, tiny, sizeof(tiny)) == -1,
+    ASSERT(web_format_status(0xFF, "", NULL, 0, "idle", 0, 0xFF, 0, tiny, sizeof(tiny)) == -1,
            "truncated status write must return -1");
-    ASSERT(web_format_status(0xFF, "", NULL, 0, "idle", 0, NULL, 0) == -1,
+    ASSERT(web_format_status(0xFF, "", NULL, 0, "idle", 0, 0xFF, 0, NULL, 0) == -1,
            "NULL/zero-cap status write must return -1");
     ASSERT(web_parse_key_name("POWER") == IR_KEY_POWER,
            "parse is stateless across calls after error cases");
@@ -146,7 +154,7 @@ int main(void)
     strcpy(hostile[0].name, "say \"hi\\\"\n");   /* say "hi\"<LF> */
     hostile[0].step_count = 1;
     hostile[0].first_key = IR_KEY_OK;
-    n = web_format_status(0xFF, "", hostile, 1, "idle", 0, buf, sizeof(buf));
+    n = web_format_status(0xFF, "", hostile, 1, "idle", 0, 0xFF, 0, buf, sizeof(buf));
     ASSERT(n > 0, "status with a hostile macro name must format");
     ASSERT(strstr(buf, "\"name\":\"say \\\"hi\\\\\\\"\\n\"") != NULL,
            "\" \\ and LF must escape as \\\" \\\\ \\n");
@@ -158,7 +166,7 @@ int main(void)
     strcpy(ctrl[0].name, "a\x01z\t");   /* a, SOH, z, TAB */
     ctrl[0].step_count = 1;
     ctrl[0].first_key = IR_KEY_OK;
-    n = web_format_status(0xFF, "", ctrl, 1, "idle", 0, buf, sizeof(buf));
+    n = web_format_status(0xFF, "", ctrl, 1, "idle", 0, 0xFF, 0, buf, sizeof(buf));
     ASSERT(n > 0, "status with control chars in macro name must format");
     ASSERT(strstr(buf, "\"name\":\"a\\u0001z\\t\"") != NULL,
            "SOH escapes as \\u0001 and TAB as \\t");

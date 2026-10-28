@@ -294,6 +294,16 @@ int main(void)
     ASSERT(macro_core_index_get_count() == 1,
            "index count == 1 after the wipe-triggering add");
 
+    /* === Test 6: one-key binding delete-clearing semantics === */
+
+    ASSERT(MACRO_ONEKEY_NONE == 0xFFu, "one-key sentinel is 0xFF (no id collision)");
+    ASSERT(macro_core_onekey_after_delete(5, 5) == MACRO_ONEKEY_NONE,
+           "deleting the bound macro clears the binding");
+    ASSERT(macro_core_onekey_after_delete(7, 5) == 7,
+           "deleting an unbound macro keeps the binding");
+    ASSERT(macro_core_onekey_after_delete(MACRO_ONEKEY_NONE, 5) == MACRO_ONEKEY_NONE,
+           "no binding stays no binding after any delete");
+
     printf("MACRO_SELFTEST_PASS\n");
     return 0;
 }

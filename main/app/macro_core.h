@@ -277,3 +277,19 @@ static inline int macro_core_index_remove(uint8_t id)
     macro_core_index_count--;
     return 0;
 }
+
+/* ---- one-key (physical button) macro binding ---------------------------
+ *
+ * The one-key binding is a single macro id kept by the engine layer (NVS
+ * persisted, "macros"/"one_key"). This header owns only the pure semantics:
+ * the rule that deleting a macro clears a binding that pointed at it. The
+ * MACRO_ONEKEY_NONE sentinel lives in app/macro_types.h (state-free) so other
+ * TUs can reference it without pulling in this header's static state.
+ */
+
+/* The one-key binding after deleting macro `deleted_id`: a matching binding
+ * is cleared to MACRO_ONEKEY_NONE, otherwise left unchanged. */
+static inline uint8_t macro_core_onekey_after_delete(uint8_t current, uint8_t deleted_id)
+{
+    return (current == deleted_id) ? MACRO_ONEKEY_NONE : current;
+}

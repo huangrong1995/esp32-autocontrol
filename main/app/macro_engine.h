@@ -87,6 +87,34 @@ int macro_is_playing(void);
 /* Whether recording is active right now. */
 int macro_is_recording(void);
 
+/* Bind macro `id` as the one-key (physical button) macro, replacing any prior
+ * binding. ESP_ERR_NOT_FOUND when `id` is not a stored macro. The binding
+ * persists in NVS ("macros"/"one_key") so it survives reboot. */
+esp_err_t macro_set_onekey(uint8_t id);
+
+/* Clear the one-key binding if it currently equals `id` (no-op otherwise;
+ * always ESP_OK for a non-bound id). */
+esp_err_t macro_clear_onekey(uint8_t id);
+
+/* Current one-key binding (macro id), or MACRO_ONEKEY_NONE (0xFF) when none.
+ * Read by GET /api/status and the button task; a single atomic byte read. */
+uint8_t macro_get_onekey(void);
+
+/* Power-on auto-replay flag ("macros"/"auto_play", u8 0/1, default off).
+ * When enabled, macro_engine_selfstart() replays the current one-key macro
+ * once after boot. Switch `on`: 1 = enable, 0 = disable; NVS is written only
+ * on an actual change. */
+esp_err_t macro_set_selfstart(uint8_t on);
+
+/* Current power-on auto-replay flag (0 or 1). */
+uint8_t macro_get_selfstart(void);
+
+/* Power-on auto-replay hook: when the selfstart flag is on AND a one-key macro
+ * is bound AND the device is paired, starts playback of the one-key macro once.
+ * Otherwise a logged no-op (also when unpaired). Call ONCE from app_main after
+ * macro_engine_init() (RMT TX init is lazy, so playback may begin immediately). */
+void macro_engine_selfstart(void);
+
 #ifdef __cplusplus
 }
 #endif

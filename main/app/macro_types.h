@@ -35,3 +35,10 @@ typedef struct {
 #define MACRO_STEP_ENCODED_BYTES 5u /* per-step blob: u32le wait + u8 key */
 #define MACRO_REPLAY_SLEEP_CHUNK_MS 50u /* interruptible wait granularity */
 #define MACRO_NAME_CAP       24u    /* macro_info_t::name bytes incl NUL */
+
+/* One-key (physical button) macro binding: a macro id, or 0xFF when none.
+ * Macro ids are 0..254 (see MACRO_MAX_ID), so 0xFF can never collide — safe
+ * NVS sentinel and unsafe-default. Kept here (state-free) so the button engine
+ * and status formatter can reference it WITHOUT including macro_core.h's
+ * per-TU static state. */
+#define MACRO_ONEKEY_NONE    0xFFu

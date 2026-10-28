@@ -252,7 +252,9 @@ static esp_err_t handle_api_status(httpd_req_t *req)
     macro_macros_snapshot(macros, MACRO_INDEX_MAX, &mac_count);
     int n = web_format_status(pid, (p != NULL) ? p->name : "",
                               macros, mac_count, state,
-                              (unsigned)macro_get_playback_step(), buf, sizeof(buf));
+                              (unsigned)macro_get_playback_step(),
+                              macro_get_onekey(), macro_get_selfstart(),
+                              buf, sizeof(buf));
     if (n < 0) {
         n = (int)strlen(buf);   /* truncated; send what we have below */
     }
@@ -586,6 +588,39 @@ static esp_err_t handle_api_macro_play(httpd_req_t *req)
     }
     if (id > 0xFFu) {
         return send_json(req, "400 Bad Request", "{\"error\":\"invalid id\"}");
+    }
+    /* Optional one_key toggle: {"id":N,"one_key":true/false} binds (or clears
+     * a binding of) macro N as the physical-button macro WITHOUT consuming the
+     * request — the call then still runs the plain play path below for
+     * immediate feedback. jfield distinguishes "field absent" (plain play)
+     * from "field present but not a bool" (400). */
+    size_t vlen = 0;
+    if (jfield(body, (size_t)len, "one_key", &vlen) != NULL) {
+        int one_key = 0;
+        if (!jget_bool(body, (size_t)len, "one_key", &one_key)) {
+            return send_json(req, "400 Bad Request", "{\"error\":\"invalid body\"}");
+        }
+        esp_err_t be = one_key ? macro_set_onekey((uint8_t)id)
+                               : macro_clear_onekey((uint8_t)id);
+        if (be == ESP_ERR_NOT_FOUND) {
+            return send_json(req, "404 Not Found", "{\"error\":\"macro not found\"}");
+        }
+        if (be != ESP_OK) {
+            return send_json(req, "400 Bad Request", "{\"error\":\"play failed\"}");
+        }
+    }
+    /* Optional selfstart toggle: {"id":N,"selfstart":true/false} enables (or
+     * disables) power-on auto-replay of the one-key macro. Independent of the
+     * plain play path below — same no-new-route contract as `one_key`. */
+    if (jfield(body, (size_t)len, "selfstart", &vlen) != NULL) {
+        int ss = 0;
+        if (!jget_bool(body, (size_t)len, "selfstart", &ss)) {
+            return send_json(req, "400 Bad Request", "{\"error\":\"invalid body\"}");
+        }
+        esp_err_t se = macro_set_selfstart(ss ? 1u : 0u);
+        if (se != ESP_OK) {
+            return send_json(req, "400 Bad Request", "{\"error\":\"play failed\"}");
+        }
     }
     esp_err_t e = macro_play((uint8_t)id);
     if (e == ESP_ERR_NOT_FOUND) {

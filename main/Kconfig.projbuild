@@ -11,6 +11,15 @@ config IR_CARRIER_HZ
     range 1000 100000
     help
         Infrared carrier frequency for the NEC transmitter (38 kHz typical).
+config ONE_KEY_BTN_GPIO
+    int "One-key macro button GPIO number (active-low)"
+    default 5
+    range 0 39
+    help
+        GPIO connected to a physical button shorting it to GND (internal
+        pull-up enabled); a press is a LOW level. Each debounced press plays
+        the macro bound as the "one-key macro" in the web UI. Must differ from
+        IR TX GPIO (init refuses the collision).
 config AP_SSID
     string "SoftAP SSID"
     default "esp32-ir"
